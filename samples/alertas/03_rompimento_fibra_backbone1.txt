@@ -1,0 +1,28 @@
+🛑🛑 Problema: 🛑🛑
+Equipamento: PNB-IDC-HUAWEI-PE01
+IP: 172.20.20.30
+Nome do problema: Atenuacao RX XGigabitEthernet0/0/2 - possivel degradacao de fibra
+Nível: Average
+Iniciado às: 09:12:05 em 2026.10.06
+Tags: backbone: 1, component: optical, interface: XGigabitEthernet0/0/2
+🛑🛑 Problema: 🛑🛑
+Equipamento: PNB-IDC-HUAWEI-PE01
+IP: 172.20.20.30
+Nome do problema: Interface XGigabitEthernet0/0/2(BACKBONE-ATD): Link down
+Nível: Average
+Iniciado às: 09:14:40 em 2026.10.06
+Tags: backbone: 1, component: network
+🛑🛑 Problema: 🛑🛑
+Equipamento: PNB-IDC-HUAWEI-PE01
+IP: 172.20.20.30
+Nome do problema: OSPF: Vizinho 172.29.65.18 em Vlanif2062 reiniciou a adjacencia
+Nível: Information
+Iniciado às: 09:14:42 em 2026.10.06
+Tags: backbone: 1, component: ospf
+🛑🛑 Problema: 🛑🛑
+Equipamento: ATD-IDC-HUAWEI-PE01
+IP: 172.20.20.31
+Nome do problema: OSPF: Vizinho 172.29.65.17 em Vlanif2062 reiniciou a adjacencia
+Nível: Information
+Iniciado às: 09:14:42 em 2026.10.06
+Tags: backbone: 1, component: ospf

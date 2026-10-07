@@ -1,0 +1,37 @@
+🛑🛑 Problema: 🛑🛑
+Equipamento: TRN-LOJA-HUAWEI-PE01
+IP: 172.20.20.80
+Nome do problema: Interface GigabitEthernet0/0/1(UPLINK): Link down
+Nível: Average
+Iniciado às: 10:00:05 em 2026.10.06
+Tags: edge: 3
+✅✅ Resolvido: ✅✅
+Equipamento: TRN-LOJA-HUAWEI-PE01
+IP: 172.20.20.80
+Nome do problema: Interface GigabitEthernet0/0/1(UPLINK): Link down
+Nível: Average
+Iniciado às: 10:00:05 em 2026.10.06
+Resolvido às: 10:00:40 em 2026.10.06
+Duração: 35s
+🛑🛑 Problema: 🛑🛑
+Equipamento: TRN-LOJA-HUAWEI-PE01
+IP: 172.20.20.80
+Nome do problema: Interface GigabitEthernet0/0/1(UPLINK): Link down
+Nível: Average
+Iniciado às: 10:02:10 em 2026.10.06
+Tags: edge: 3
+✅✅ Resolvido: ✅✅
+Equipamento: TRN-LOJA-HUAWEI-PE01
+IP: 172.20.20.80
+Nome do problema: Interface GigabitEthernet0/0/1(UPLINK): Link down
+Nível: Average
+Iniciado às: 10:02:10 em 2026.10.06
+Resolvido às: 10:02:31 em 2026.10.06
+Duração: 21s
+🛑🛑 Problema: 🛑🛑
+Equipamento: TRN-LOJA-HUAWEI-PE01
+IP: 172.20.20.80
+Nome do problema: Interface GigabitEthernet0/0/1(UPLINK): Link down
+Nível: Average
+Iniciado às: 10:04:55 em 2026.10.06
+Tags: edge: 3

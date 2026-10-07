@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "fibraplus-monitor": {
+      "command": "C:\\FibraPlus-AI\\.venv\\Scripts\\python.exe",
+      "args": [
+        "C:\\FibraPlus-AI\\server\\mcp_server.py"
+      ]
+    }
+  }
+}

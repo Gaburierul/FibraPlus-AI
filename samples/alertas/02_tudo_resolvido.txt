@@ -1,0 +1,24 @@
+✅✅ Resolvido: ✅✅
+Equipamento: CPE-MSD-HUAWEI-VS02-RR
+IP: 172.20.20.250
+Nome do problema: 2804:5BC8:400::13 não está ESTABLISHED
+Nível: Disaster
+Iniciado às: 15:43:18 em 2026.10.06
+Resolvido às: 15:51:02 em 2026.10.06
+Duração: 7m 44s
+✅✅ Resolvido: ✅✅
+Equipamento: CPE-MSD-HUAWEI-VS02-RR
+IP: 172.20.20.250
+Nome do problema: 2804:5BC8:400::14 não está ESTABLISHED
+Nível: Disaster
+Iniciado às: 15:43:19 em 2026.10.06
+Resolvido às: 15:51:03 em 2026.10.06
+Duração: 7m 44s
+✅✅ Resolvido: ✅✅
+Equipamento: FIGE-IDC-DATACOM-PE01
+IP: 172.20.20.14
+Nome do problema: Generic SNMP: No SNMP data collection
+Nível: Warning
+Iniciado às: 15:46:31 em 2026.10.06
+Resolvido às: 15:52:10 em 2026.10.06
+Duração: 5m 39s
