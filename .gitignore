@@ -3,6 +3,10 @@
 
 # Variáveis de ambiente (NUNCA commitar)
 .env
+.env.*
+*.env
+*.env.*
+!.env.example
 
 # Python
 __pycache__/
@@ -13,12 +17,14 @@ __pycache__/
 .vscode/
 .idea/
 
-# Logs e dados locais gerados
-logs/*.log
-logs/*.jsonl
-logs/*.txt
-logs/*.db
-logs/*.sqlite3
-logs/*.sqlite3-*
+# Logs e dados operacionais locais
+logs/
 resumo_dia_07.json
 samples/alertas/09_ativos_zabbix.txt
+docs/relatorios/
+
+# Scripts exploratórios locais; ferramentas reutilizáveis devem ficar em scripts/
+/analyze_*.py
+/check_*.py
+/search_*.py
+/update_webhook.py

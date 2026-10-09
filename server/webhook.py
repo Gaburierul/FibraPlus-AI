@@ -10,7 +10,10 @@ Executar (na pasta do projeto):
     uvicorn server.webhook:app --host 127.0.0.1 --port 8089
 
 Variáveis de ambiente (.env) — ver README, seção "Webhook":
-    WEBHOOK_TOKEN          obrigatório; o Zabbix envia no cabeçalho X-Webhook-Token
+    RAVI_WEBHOOK_TOKEN     segredo Ravi; query string permanece aceita quando necessário
+    ZABBIX_WEBHOOK_TOKEN   segredo Zabbix; enviado no cabeçalho X-Webhook-Token
+    WEBHOOK_TOKEN          fallback legado enquanto as origens migram para segredos distintos
+    NOC_WEBHOOK_MAX_BODY_BYTES limite de corpo JSON (padrão 1 MiB)
     MODO_TESTE             "true" (padrão) só registra; "false" envia ao mensageiro configurado
     DEBOUNCE_SILENCIO_S    segundos sem alerta novo para fechar o lote (padrão 45)
     DEBOUNCE_MAX_S         tempo máximo de um lote (padrão 180)
@@ -27,8 +30,10 @@ import hmac
 import json
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
@@ -44,7 +49,7 @@ from noc.correlator import correlacionar  # noqa: E402
 from noc.debounce import AgrupadorAlertas  # noqa: E402
 from noc.parser import Alerta  # noqa: E402
 from noc.zabbix_event import (PayloadInvalido, chave_evento, eh_atualizacao,  # noqa: E402
-                              payload_para_alerta, resumo_curto, severidade_minima_ok)
+                              payload_para_alerta, severidade_minima_ok)
 
 PASTA_LOGS = RAIZ / "logs"
 PASTA_LOGS.mkdir(exist_ok=True)
@@ -53,9 +58,25 @@ logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     handlers=[logging.StreamHandler(),
-              logging.FileHandler(PASTA_LOGS / "webhook.log", encoding="utf-8")],
+              RotatingFileHandler(PASTA_LOGS / "webhook.log", maxBytes=5_000_000,
+                                  backupCount=5, encoding="utf-8")],
 )
 log = logging.getLogger("noc.webhook")
+
+
+class _RedigirTokenQuery(logging.Filter):
+    """Evita registrar em claro o token do Ravi enviado como query string."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name == "uvicorn.access" and isinstance(record.args, tuple) and len(record.args) >= 3:
+            argumentos = list(record.args)
+            argumentos[2] = re.sub(
+                r"([?&]token=)[^&\s]+", r"\1[REDACTED]", str(argumentos[2]), flags=re.IGNORECASE
+            )
+            record.args = tuple(argumentos)
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_RedigirTokenQuery())
 
 
 def _bool_env(nome: str, padrao: bool) -> bool:
@@ -83,7 +104,27 @@ def _float_env(nome: str, padrao: float, minimo: float, maximo: float) -> float:
     return valor
 
 
-WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN", "")
+def _int_env(nome: str, padrao: int, minimo: int, maximo: int) -> int:
+    bruto = os.getenv(nome)
+    if bruto is None or not bruto.strip():
+        return padrao
+    try:
+        valor = int(bruto)
+    except ValueError as exc:
+        raise RuntimeError(f"{nome} deve ser um inteiro.") from exc
+    if not minimo <= valor <= maximo:
+        raise RuntimeError(f"{nome} deve estar entre {minimo} e {maximo}.")
+    return valor
+
+
+TOKEN_LEGADO = os.getenv("WEBHOOK_TOKEN", "").strip()
+RAVI_WEBHOOK_TOKENS = tuple(dict.fromkeys(
+    token for token in (os.getenv("RAVI_WEBHOOK_TOKEN", "").strip(), TOKEN_LEGADO) if token
+))
+ZABBIX_WEBHOOK_TOKENS = tuple(dict.fromkeys(
+    token for token in (os.getenv("ZABBIX_WEBHOOK_TOKEN", "").strip(), TOKEN_LEGADO) if token
+))
+MAX_WEBHOOK_BODY_BYTES = _int_env("NOC_WEBHOOK_MAX_BODY_BYTES", 1_048_576, 1_024, 10_485_760)
 MODO_TESTE = _bool_env("MODO_TESTE", True)
 USAR_IA = _bool_env("NOC_USAR_IA", True)
 IA_AUTO_ENVIO = _bool_env("NOC_AI_AUTO_SEND", False)
@@ -96,8 +137,11 @@ if _sev and (not _sev.isdigit() or not 0 <= int(_sev) <= 5):
     raise RuntimeError("NOC_SEVERIDADE_MINIMA deve ser um inteiro de 0 a 5.")
 SEVERIDADE_MINIMA = int(_sev) if _sev else None
 
-if not WEBHOOK_TOKEN:
-    raise RuntimeError("Defina WEBHOOK_TOKEN no .env (o mesmo valor configurado no Zabbix).")
+if not RAVI_WEBHOOK_TOKENS or not ZABBIX_WEBHOOK_TOKENS:
+    raise RuntimeError(
+        "Defina RAVI_WEBHOOK_TOKEN e ZABBIX_WEBHOOK_TOKEN no .env; "
+        "WEBHOOK_TOKEN permanece disponível como fallback temporário."
+    )
 if not MODO_TESTE:
     if MENSAGEIRO not in {"telegram", "evolution"}:
         raise RuntimeError("NOC_MENSAGEIRO deve ser telegram ou evolution.")
@@ -202,38 +246,71 @@ async def _ciclo_de_vida(_: FastAPI):
         await agrupador.descarregar()
 
 
-app = FastAPI(title="FibraPlus NOC IA", lifespan=_ciclo_de_vida)
+app = FastAPI(
+    title="FibraPlus NOC IA",
+    lifespan=_ciclo_de_vida,
+    docs_url="/docs" if MODO_TESTE else None,
+    redoc_url="/redoc" if MODO_TESTE else None,
+    openapi_url="/openapi.json" if MODO_TESTE else None,
+)
 
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    pendentes_por_origem = {origem.lower(): agrupador.pendentes
-                            for origem, agrupador in AGRUPADORES.items()}
-    return {"status": "ok", "modo_teste": MODO_TESTE,
-            "ia_no_teste": IA_NO_TESTE, "ia_auto_envio": IA_AUTO_ENVIO,
-            "alertas_no_lote": sum(pendentes_por_origem.values()),
-            "alertas_por_origem": pendentes_por_origem}
+    # O poller só precisa deste estado para bloquear envio real acidental.
+    return {"status": "ok", "modo_teste": MODO_TESTE}
+
+
+async def _ler_payload_json(request: Request) -> dict[str, Any]:
+    tamanho = request.headers.get("content-length", "").strip()
+    if tamanho:
+        try:
+            tamanho_declarado = int(tamanho)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Content-Length inválido") from exc
+        if tamanho_declarado < 0:
+            raise HTTPException(status_code=400, detail="Content-Length inválido")
+        if tamanho_declarado > MAX_WEBHOOK_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="corpo excede o limite configurado")
+
+    corpo = bytearray()
+    async for bloco in request.stream():
+        if len(corpo) + len(bloco) > MAX_WEBHOOK_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="corpo excede o limite configurado")
+        corpo.extend(bloco)
+    try:
+        payload = json.loads(corpo)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="corpo não é JSON UTF-8 válido") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="JSON deve ser um objeto")
+    return payload
+
+
+def _token_valido_para_origem(token: str, permitidos: tuple[str, ...]) -> bool:
+    candidato = token.encode("utf-8")
+    valido = False
+    for esperado in permitidos:
+        valido = hmac.compare_digest(candidato, esperado.encode("utf-8")) or valido
+    return valido
 
 
 @app.post("/ravi/webhook", status_code=202)
 async def receber_ravi(request: Request, token: str = "", x_webhook_token: str = Header(default="")) -> JSONResponse:
     provided_token = token or x_webhook_token
-    if not hmac.compare_digest(provided_token.encode(), WEBHOOK_TOKEN.encode()):
+    if not _token_valido_para_origem(provided_token, RAVI_WEBHOOK_TOKENS):
         raise HTTPException(status_code=401, detail="token inválido")
-    try:
-        payload = await request.json()
-    except ValueError:
-        raise HTTPException(status_code=400, detail="corpo não é JSON")
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="JSON deve ser um objeto")
+    payload = await _ler_payload_json(request)
 
     try:
-        from noc.ravi_event import (payload_para_alerta_ravi, PayloadRaviIgnorado,
-                                    PayloadRaviInvalido)
+        from noc.ravi_event import (chave_evento_ravi, payload_para_alerta_ravi,
+                                    PayloadRaviIgnorado, PayloadRaviInvalido)
         alerta = payload_para_alerta_ravi(payload)
         agrupador = AGRUPADORES["RAVI"]
-        novo = await agrupador.adicionar(alerta)
-        log.info("%s %s", "Recebido Ravi" if novo else "Duplicado Ravi", resumo_curto(alerta))
+        novo = await agrupador.adicionar(alerta, chave=chave_evento_ravi(payload))
+        log.info("%s | origem=RAVI | estado=%s | severidade=%s | no_lote=%d",
+                 "Recebido" if novo else "Duplicado", alerta.status,
+                 alerta.nivel, agrupador.pendentes)
         if not novo:
             return JSONResponse({"status": "duplicado", "alertas_no_lote": agrupador.pendentes}, status_code=202)
         return JSONResponse({"status": "na_fila_ravi", "alertas_no_lote": agrupador.pendentes}, status_code=202)
@@ -248,14 +325,9 @@ async def receber_ravi(request: Request, token: str = "", x_webhook_token: str =
 
 @app.post("/zabbix/webhook", status_code=202)
 async def receber(request: Request, x_webhook_token: str = Header(default="")) -> JSONResponse:
-    if not hmac.compare_digest(x_webhook_token.encode(), WEBHOOK_TOKEN.encode()):
+    if not _token_valido_para_origem(x_webhook_token, ZABBIX_WEBHOOK_TOKENS):
         raise HTTPException(status_code=401, detail="token inválido")
-    try:
-        payload = await request.json()
-    except ValueError:
-        raise HTTPException(status_code=400, detail="corpo não é JSON")
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="JSON deve ser um objeto")
+    payload = await _ler_payload_json(request)
 
     if eh_atualizacao(payload):
         return JSONResponse({"status": "ignorado", "motivo": "evento de atualização"}, status_code=202)
@@ -270,7 +342,8 @@ async def receber(request: Request, x_webhook_token: str = Header(default="")) -
 
     agrupador = AGRUPADORES["ZABBIX"]
     novo = await agrupador.adicionar(alerta, chave=chave_evento(payload))
-    log.info("%s %s", "Recebido" if novo else "Duplicado", resumo_curto(alerta))
+    log.info("%s | origem=ZABBIX | estado=%s | severidade=%s | no_lote=%d",
+             "Recebido" if novo else "Duplicado", alerta.status,
+             alerta.nivel, agrupador.pendentes)
     return JSONResponse({"status": "na_fila" if novo else "duplicado",
                          "alertas_no_lote": agrupador.pendentes}, status_code=202)
-

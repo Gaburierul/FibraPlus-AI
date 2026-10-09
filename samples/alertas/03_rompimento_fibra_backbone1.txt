@@ -1,28 +1,31 @@
 🛑🛑 Problema: 🛑🛑
-Equipamento: PNB-IDC-HUAWEI-PE01
-IP: 172.20.20.30
-Nome do problema: Atenuacao RX XGigabitEthernet0/0/2 - possivel degradacao de fibra
+Equipamento: LAB-SITE-C-PE01
+IP: 203.0.113.10
+Nome do problema: Perda sintética de sinal óptico no enlace de laboratório
 Nível: Average
-Iniciado às: 09:12:05 em 2026.10.06
-Tags: backbone: 1, component: optical, interface: XGigabitEthernet0/0/2
+Iniciado às: 11:00:00 em 2025.01.15
+Tags: backbone: 1, component: optical, interface: TenGigabitEthernet0/0/1
+
 🛑🛑 Problema: 🛑🛑
-Equipamento: PNB-IDC-HUAWEI-PE01
-IP: 172.20.20.30
-Nome do problema: Interface XGigabitEthernet0/0/2(BACKBONE-ATD): Link down
+Equipamento: LAB-SITE-C-PE01
+IP: 203.0.113.10
+Nome do problema: Vizinho de roteamento sintético indisponível após perda óptica
 Nível: Average
-Iniciado às: 09:14:40 em 2026.10.06
+Iniciado às: 11:00:20 em 2025.01.15
 Tags: backbone: 1, component: network
+
 🛑🛑 Problema: 🛑🛑
-Equipamento: PNB-IDC-HUAWEI-PE01
-IP: 172.20.20.30
-Nome do problema: OSPF: Vizinho 172.29.65.18 em Vlanif2062 reiniciou a adjacencia
-Nível: Information
-Iniciado às: 09:14:42 em 2026.10.06
+Equipamento: LAB-SITE-D-PE01
+IP: 203.0.113.11
+Nome do problema: Adjacência OSPF sintética caiu
+Nível: High
+Iniciado às: 11:00:35 em 2025.01.15
 Tags: backbone: 1, component: ospf
+
 🛑🛑 Problema: 🛑🛑
-Equipamento: ATD-IDC-HUAWEI-PE01
-IP: 172.20.20.31
-Nome do problema: OSPF: Vizinho 172.29.65.17 em Vlanif2062 reiniciou a adjacencia
-Nível: Information
-Iniciado às: 09:14:42 em 2026.10.06
-Tags: backbone: 1, component: ospf
+Equipamento: LAB-SITE-D-BNG01
+IP: 203.0.113.12
+Nome do problema: Redução sintética de sessões PPPoE
+Nível: Average
+Iniciado às: 11:01:00 em 2025.01.15
+Tags: backbone: 1, component: pppoe

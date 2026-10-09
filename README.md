@@ -20,7 +20,7 @@ Este é o cérebro automatizado do NOC da FibraPlus. O sistema lê alertas caót
    .\.venv\Scripts\Activate.ps1
    pip install -r requirements.txt
    ```
-4. Crie um arquivo `.env` na raiz do projeto com base no escopo abaixo:
+4. Copie `.env.example` para `.env` na raiz e preencha os valores localmente. Nunca publique o `.env`:
    ```env
    ZABBIX_URL=https://zabbix.example.com/api_jsonrpc.php
    ZABBIX_TOKEN=seu_token_aqui
@@ -29,11 +29,16 @@ Este é o cérebro automatizado do NOC da FibraPlus. O sistema lê alertas caót
    GEMINI_API_KEY=sua_chave_gemini_aqui
    NOC_AI_MODEL=gemini-3.5-flash-lite
    NOC_AI_THINKING=minimal
+   NOC_AI_REDACT_DATA=true
    GEMINI_TIMEOUT_S=45
    ZABBIX_TIMEOUT_S=15
    RAVICOR_TIMEOUT_S=15
    MESSAGING_TIMEOUT_S=20
-   WEBHOOK_TOKEN=um_token_aleatorio_compartilhado_com_o_zabbix
+   # Compatibilidade temporária; prefira tokens distintos por origem.
+   WEBHOOK_TOKEN=
+   RAVI_WEBHOOK_TOKEN=token_aleatorio_exclusivo_do_ravi
+   ZABBIX_WEBHOOK_TOKEN=token_aleatorio_exclusivo_do_zabbix
+   NOC_WEBHOOK_MAX_BODY_BYTES=1048576
    MODO_TESTE=true
    NOC_USAR_IA=true
    NOC_AI_AUTO_SEND=false
@@ -51,6 +56,8 @@ Este é o cérebro automatizado do NOC da FibraPlus. O sistema lê alertas caót
 
 ## 🧠 Como Usar (Testando a IA localmente)
 
+Os arquivos em `samples/alertas` são cenários sintéticos. Não adicione exports de alertas reais, números de telefone, endereços IP internos ou nomes de clientes ao repositório público.
+
 Para analisar um log de texto com alertas do Zabbix (Prova de Conceito):
 
 ```bash
@@ -63,9 +70,17 @@ python scripts/ai_noc_analyzer.py --arquivo samples/alertas/07_entrada_user.txt 
 
 Para escolher o esforço de raciocínio, use `--thinking low|medium|high` (ou `minimal` nos modelos que aceitam esse nível). O padrão é `NOC_AI_THINKING`; as requisições Gemini têm timeout configurado por `GEMINI_TIMEOUT_S`.
 
-O Gemini usa `gemini-3.5-flash-lite` por padrão e `NOC_AI_THINKING=minimal`; `low`, `medium` e `high` podem ser escolhidos quando a análise exigir mais raciocínio. As chamadas de envio ao Telegram e Evolution usam timeout configurável por `MESSAGING_TIMEOUT_S`. Em falhas de rede, o cliente não repete automaticamente um POST de envio, pois a API pode ter aceitado a mensagem antes da conexão cair; novas tentativas ficam restritas a respostas HTTP 429.
+O Gemini usa `gemini-3.5-flash-lite` por padrão e `NOC_AI_THINKING=minimal`; `low`, `medium` e `high` podem ser escolhidos quando a análise exigir mais raciocínio. A resposta da IA é limitada a 1.024 tokens e cada análise faz no máximo uma chamada; em falhas da API, o sistema usa o resumo determinístico sem insistir em novas chamadas. As chamadas de envio ao Telegram e Evolution usam timeout configurável por `MESSAGING_TIMEOUT_S`. Em falhas de rede, o cliente não repete automaticamente um POST de envio, pois a API pode ter aceitado a mensagem antes da conexão cair; novas tentativas ficam restritas a respostas HTTP 429.
 
 Alertas do Ravi usam a severidade explícita que vier no payload (0 a 5 ou rótulo reconhecido). Quando ela não é fornecida, o sistema marca a severidade como desconhecida e evita elevar um evento a crítico apenas por mencionar OLT, rota ou link. Campos ausentes de IP, horário, equipamento ou descrição ficam registrados como avisos para limitar conclusões da IA. A classificação de tags topológicas do Zabbix continua definida em `docs/regras_tags_zabbix.md`.
+
+Em modo real, a documentação interativa do FastAPI fica desativada. O endpoint `/health` retorna somente o estado necessário para o poller validar se o webhook está em modo de teste. Os corpos dos webhooks têm limite configurável por `NOC_WEBHOOK_MAX_BODY_BYTES` (padrão de 1 MiB; faixa aceita de 1 KiB a 10 MiB).
+
+Antes da chamada ao Gemini, `NOC_AI_REDACT_DATA=true` (padrão) substitui equipamento, site, IP e identificadores de interface por rótulos temporários, além de mascarar IPs, e-mails e telefones reconhecidos no texto. Descrições livres ainda podem conter nomes que não pareçam identificadores; revise os campos do alerta e não envie informação confidencial a uma API sem confirmar o regime de privacidade da conta. Quando a IA cita um rótulo pseudonimizado válido, a mensagem interna traduz o sinal citado de volta ao valor do alerta.
+
+Use `RAVI_WEBHOOK_TOKEN` e `ZABBIX_WEBHOOK_TOKEN` diferentes. O Ravi pode continuar enviando o token pela query string se não aceitar cabeçalho; nesse caso, o segredo pode aparecer em URLs registradas pelo cliente ou pelo túnel. Durante a migração, o servidor aceita os tokens por origem e o antigo `WEBHOOK_TOKEN`. Gere dois valores novos localmente com `python -c "import secrets; print(secrets.token_urlsafe(32))"`, salve-os no `.env` e configure o Ravi como `https://<dominio-do-tunel>/ravi/webhook?token=<RAVI_WEBHOOK_TOKEN>`. Reinicie webhook e poller; o poller passa a usar `ZABBIX_WEBHOOK_TOKEN`. Depois de atualizar e testar o Ravi, remova `WEBHOOK_TOKEN` do `.env` e reinicie o servidor para invalidar o segredo antigo.
+
+Para exibir horário nos alertas do Ravi, inclua no payload a data e hora do evento (`data`/`timestamp`, `event_date` + `event_time` ou a data no texto da mensagem). Para mostrar duração, envie `event_duration`/`duration` ou os horários de início e resolução. O sistema não estima duração quando esses dados não chegam.
 
 O relatório de ativos não envia mensagem por padrão e não chama Gemini implicitamente. `python scripts/relatorio_ativos.py --horas 1 --enviar` consulta o Zabbix, gera o resumo determinístico e envia a mensagem. Acrescente `--usar-ia` para autorizar uma chamada Gemini e acrescentar uma hipótese breve e não confirmada. `--offline` continua disponível como alias explícito. `NOC_AI_AUTO_SEND` controla apenas a hipótese de IA nos envios automáticos do webhook.
 
@@ -112,4 +127,3 @@ O script `zabbix/webhook_fibraplus_ia.js` permanece como alternativa caso um adm
 
 ## 📝 Regras de Negócio
 A classificação de Severidade da IA respeita topologia. Tags nativas do Zabbix (`backbone`, `edge`) ditam o peso do alerta de `1` (Crítico) a `3` (Informativo), ignorando a severidade puramente técnica da trigger. Ver detalhes em `docs/regras_tags_zabbix.md`.
-

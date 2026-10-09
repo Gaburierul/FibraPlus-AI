@@ -1,24 +1,26 @@
 ✅✅ Resolvido: ✅✅
-Equipamento: CPE-MSD-HUAWEI-VS02-RR
-IP: 172.20.20.250
-Nome do problema: 2804:5BC8:400::13 não está ESTABLISHED
+Equipamento: LAB-SITE-A-OLT01
+IP: 192.0.2.20
+Nome do problema: Indisponibilidade sintética de OLT de laboratório
 Nível: Disaster
-Iniciado às: 15:43:18 em 2026.10.06
-Resolvido às: 15:51:02 em 2026.10.06
+Iniciado às: 09:40:00 em 2025.01.15
+Resolvido às: 09:47:44 em 2025.01.15
 Duração: 7m 44s
+
 ✅✅ Resolvido: ✅✅
-Equipamento: CPE-MSD-HUAWEI-VS02-RR
-IP: 172.20.20.250
-Nome do problema: 2804:5BC8:400::14 não está ESTABLISHED
-Nível: Disaster
-Iniciado às: 15:43:19 em 2026.10.06
-Resolvido às: 15:51:03 em 2026.10.06
+Equipamento: LAB-SITE-B-PE01
+IP: 198.51.100.10
+Nome do problema: Peer BGP sintético indisponível
+Nível: High
+Iniciado às: 09:42:00 em 2025.01.15
+Resolvido às: 09:49:44 em 2025.01.15
 Duração: 7m 44s
+
 ✅✅ Resolvido: ✅✅
-Equipamento: FIGE-IDC-DATACOM-PE01
-IP: 172.20.20.14
-Nome do problema: Generic SNMP: No SNMP data collection
+Equipamento: LAB-SITE-B-EDGE01
+IP: 198.51.100.11
+Nome do problema: Alerta sintético de interface normalizado
 Nível: Warning
-Iniciado às: 15:46:31 em 2026.10.06
-Resolvido às: 15:52:10 em 2026.10.06
+Iniciado às: 09:44:00 em 2025.01.15
+Resolvido às: 09:49:39 em 2025.01.15
 Duração: 5m 39s

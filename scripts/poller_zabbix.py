@@ -184,7 +184,7 @@ def validar_config(url: str, token: str) -> None:
     if not url.rstrip("/").endswith("/zabbix/webhook"):
         raise ValueError("URL do webhook deve terminar em /zabbix/webhook")
     if not token.strip():
-        raise ValueError("WEBHOOK_TOKEN ausente no .env")
+        raise ValueError("ZABBIX_WEBHOOK_TOKEN ou WEBHOOK_TOKEN ausente no .env")
 
 
 def confirmar_modo_teste(url: str, permitir_real: bool) -> None:
@@ -201,8 +201,7 @@ def confirmar_modo_teste(url: str, permitir_real: bool) -> None:
         raise RuntimeError(
             "Webhook está em modo real; use --permitir-envio-real somente quando quiser autorizar envios"
         )
-    LOG.info("Webhook acessível | modo_teste=%s | IA no teste=%s",
-             health.get("modo_teste"), health.get("ia_no_teste"))
+    LOG.info("Webhook acessível | modo_teste=%s", health.get("modo_teste"))
 
 
 def enviar_evento(url: str, token: str, payload: dict[str, Any]) -> str:
@@ -326,7 +325,7 @@ def main() -> int:
     if not 1 <= args.limite <= 10000:
         parser.error("--limite deve estar entre 1 e 10000")
 
-    token = os.getenv("WEBHOOK_TOKEN", "")
+    token = os.getenv("ZABBIX_WEBHOOK_TOKEN", "").strip() or os.getenv("WEBHOOK_TOKEN", "").strip()
     try:
         validar_config(args.url, token)
         confirmar_modo_teste(args.url, args.permitir_envio_real)

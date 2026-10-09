@@ -1,66 +1,15 @@
 🛑🛑 Problema: 🛑🛑
-Equipamento: CPE-MSD-HUAWEI-BNG01
-IP: 10.1.1.4
-Nome do problema: {ITEM.NAME1}: queda de 50% ou mais nos clientes PPPoE conectados
-Nível: High    
-Iniciado às: 15:42:47 em 2026.10.06
-
-✅✅ Resolvido: ✅✅
-Equipamento: CPE-MSD-HUAWEI-BNG01
-IP: 10.1.1.4
-Nome do problema: {ITEM.NAME1}: queda de 50% ou mais nos clientes PPPoE conectados
-Nível: High    
-Iniciado às: 15:41:49 em 2026.10.06
-Resolvido às: 15:42:49 em 2026.10.06
-Duração: 1m 0s
+Equipamento: LAB-SITE-G-BNG01
+IP: 203.0.113.30
+Nome do problema: Redução sintética de clientes conectados
+Nível: High
+Iniciado às: 14:10:00 em 2025.01.15
+Tags: component: pppoe
 
 🛑🛑 Problema: 🛑🛑
-Equipamento: CPE-SPIPE-CALARGE-HUAWEI-VS02-RR01
-IP: 172.20.20.251
-Nome do problema: 2804:5BC8:400::13 não está ESTABLISHED
-Nível: Disaster    
-Iniciado às: 15:43:16 em 2026.10.06
-
-🛑🛑 Problema: 🛑🛑
-Equipamento: CPE-MSD-HUAWEI-VS02-RR
-IP: 172.20.20.250
-Nome do problema: 2804:5BC8:400::13 não está ESTABLISHED
-Nível: Disaster    
-Iniciado às: 15:43:18 em 2026.10.06
-
-🛑🛑 Problema: 🛑🛑
-Equipamento: CPE-MSD-HUAWEI-VS02-RR
-IP: 172.20.20.250
-Nome do problema: 2804:5BC8:400::14 não está ESTABLISHED
-Nível: Disaster    
-Iniciado às: 15:43:19 em 2026.10.06
-
-🛑🛑 Problema: 🛑🛑
-Equipamento: CPE-SPIPE-CALARGE-HUAWEI-BNG01
-IP: 10.1.1.3
-Nome do problema: {ITEM.NAME1}: queda de 50% ou mais nos clientes PPPoE conectados
-Nível: High    
-Iniciado às: 15:43:32 em 2026.10.06
-
-✅✅ Resolvido: ✅✅
-Equipamento: CPE-SPIPE-CALARGE-HUAWEI-BNG01
-IP: 10.1.1.3
-Nome do problema: {ITEM.NAME1}: queda de 50% ou mais nos clientes PPPoE conectados
-Nível: High    
-Iniciado às: 15:39:23 em 2026.10.06
-Resolvido às: 15:46:23 em 2026.10.06
-Duração: 7m 0s
-
-🛑🛑 Problema: 🛑🛑
-Equipamento: FIGE-IDC-DATACOM-PE01
-IP: 172.20.20.14
-Nome do problema: Generic SNMP: No SNMP data collection
-Nível: Warning    
-Iniciado às: 15:46:31 em 2026.10.06
-
-🛑🛑 Problema: 🛑🛑
-Equipamento: ACPS-IDC-DATACOM-PE01
-IP: 172.20.20.13
-Nome do problema: Generic SNMP: No SNMP data collection
-Nível: Warning    
-Iniciado às: 15:46:39 em 2026.10.06
+Equipamento: LAB-SITE-G-PE01
+IP: 203.0.113.31
+Nome do problema: Rota sintética indisponível
+Nível: Disaster
+Iniciado às: 14:11:00 em 2025.01.15
+Tags: backbone: 2, component: bgp
