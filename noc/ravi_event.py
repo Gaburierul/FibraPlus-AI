@@ -142,7 +142,8 @@ def payload_para_alerta_ravi(payload: dict) -> Alerta:
     elif "LINK" in dispositivo.upper() or "DEDICADO" in dispositivo.upper():
         tipo = "link"
 
-    nivel, severidade = severidade_explicita or (-1, "Desconhecido")
+    # O helper retorna primeiro o valor numérico, depois o rótulo textual.
+    severidade, nivel = severidade_explicita or (-1, "Desconhecido")
 
     alerta = Alerta(
         status=status,
