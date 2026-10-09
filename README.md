@@ -7,7 +7,7 @@ Este é o cérebro automatizado do NOC da FibraPlus. O sistema lê alertas caót
 - **Parser Resiliente:** Processa mensagens de texto brutas originadas de grupos de WhatsApp, limpando prefixos de cópia (ex: data/telefone) e extraindo metadados críticos.
 - **Correlação Lógica (Debounce):** Agrupa alertas que ocorrem dentro de uma mesma janela de tempo (ex: 10 minutos). Se uma fibra rompe e causa a queda de BGP, OSPF e PPPoE em cascata, tudo vira um único "Incidente".
 - **Sistema de Fallback:** Funciona perfeitamente mesmo se a IA estiver fora do ar. A lógica matemática do script agrupa os alertas, identifica oscilações (Flapping 🟠) e quedas (ATIVO 🔴), garantindo que a operação nunca pare.
-- **Integração Zabbix & Ravicor:** Lógica desenhada para cruzar o equipamento afetado com os dados do Zabbix (via JSON-RPC) e Ravicor (via REST API).
+- **Integração Zabbix & Ravi:** Recebe eventos do Zabbix via JSON-RPC/poller e alertas enviados pelo webhook do Ravi.
 - **Diagnóstico assistido por IA:** Usa a Interactions API do Gemini com saída estruturada para propor uma hipótese. A severidade e os fatos da mensagem são montados pelo código a partir dos alertas; a hipótese é marcada como não confirmada.
 
 ## ⚙️ Instalação
@@ -65,13 +65,13 @@ Para escolher o esforço de raciocínio, use `--thinking low|medium|high` (ou `m
 
 O Gemini usa `gemini-3.5-flash-lite` por padrão e `NOC_AI_THINKING=minimal`; `low`, `medium` e `high` podem ser escolhidos quando a análise exigir mais raciocínio. As chamadas de envio ao Telegram e Evolution usam timeout configurável por `MESSAGING_TIMEOUT_S`. Em falhas de rede, o cliente não repete automaticamente um POST de envio, pois a API pode ter aceitado a mensagem antes da conexão cair; novas tentativas ficam restritas a respostas HTTP 429.
 
-Alertas do Ravicor recebem severidade determinística: rota, OLT ou link indisponível recebem nível 5; degradação, atenuação, perda ou oscilação recebem nível 4; eventos sem regra específica ficam no nível 3. A classificação de tags topológicas do Zabbix continua definida em `docs/regras_tags_zabbix.md`.
+Alertas do Ravi usam a severidade explícita que vier no payload (0 a 5 ou rótulo reconhecido). Quando ela não é fornecida, o sistema marca a severidade como desconhecida e evita elevar um evento a crítico apenas por mencionar OLT, rota ou link. Campos ausentes de IP, horário, equipamento ou descrição ficam registrados como avisos para limitar conclusões da IA. A classificação de tags topológicas do Zabbix continua definida em `docs/regras_tags_zabbix.md`.
 
 O relatório de ativos não envia mensagem por padrão e não chama Gemini implicitamente. `python scripts/relatorio_ativos.py --horas 1 --enviar` consulta o Zabbix, gera o resumo determinístico e envia a mensagem. Acrescente `--usar-ia` para autorizar uma chamada Gemini e acrescentar uma hipótese breve e não confirmada. `--offline` continua disponível como alias explícito. `NOC_AI_AUTO_SEND` controla apenas a hipótese de IA nos envios automáticos do webhook.
 
 ## Integração do Zabbix sem Media Type
 
-O Zabbix 7.x pode ser consultado pela API JSON-RPC usando um token com permissão de leitura para os eventos e hosts. Para esse caminho não é necessário criar Action ou Media Type no Zabbix: o processo local consulta `event.get`, mantém um cursor SQLite em `logs/zabbix_poller.sqlite3` e encaminha problemas e recuperações para `/zabbix/webhook`. A ponte usa apenas a biblioteca padrão SQLite e não chama Gemini nem envia mensagens diretamente.
+O Zabbix 7.x pode ser consultado pela API JSON-RPC usando um token com permissão de leitura para os eventos e hosts. Para esse caminho não é necessário criar Action ou Media Type no Zabbix: o processo local consulta `event.get`, mantém um cursor SQLite em `logs/zabbix_poller.sqlite3` e encaminha problemas e recuperações para `/zabbix/webhook`. O Ravi recebe em `/ravi/webhook`; cada origem tem sua própria fila/debounce para que alertas limitados do Ravi não sejam misturados automaticamente com os eventos detalhados do Zabbix. Correlação entre origens só deve ser adicionada com identificadores compartilhados confiáveis. A ponte usa SQLite e não chama Gemini nem envia mensagens diretamente.
 
 Inicie o webhook em um terminal:
 
@@ -112,3 +112,4 @@ O script `zabbix/webhook_fibraplus_ia.js` permanece como alternativa caso um adm
 
 ## 📝 Regras de Negócio
 A classificação de Severidade da IA respeita topologia. Tags nativas do Zabbix (`backbone`, `edge`) ditam o peso do alerta de `1` (Crítico) a `3` (Informativo), ignorando a severidade puramente técnica da trigger. Ver detalhes em `docs/regras_tags_zabbix.md`.
+

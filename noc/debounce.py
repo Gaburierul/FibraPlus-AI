@@ -38,13 +38,14 @@ class _Lote:
 
 class AgrupadorAlertas:
     def __init__(self, processar: ProcessarLote, silencio_s: float = 45, espera_max_s: float = 180,
-                 max_alertas: int = 500):
+                 max_alertas: int = 500, nome: str = "alertas"):
         if silencio_s <= 0 or espera_max_s < silencio_s:
             raise ValueError("exige 0 < silencio_s <= espera_max_s")
         self._processar = processar
         self.silencio_s = silencio_s
         self.espera_max_s = espera_max_s
         self.max_alertas = max_alertas
+        self.nome = nome
         self._lote: _Lote | None = None
         self._tarefa: asyncio.Task | None = None
         self._lock = asyncio.Lock()
@@ -61,7 +62,7 @@ class AgrupadorAlertas:
             if self._lote is None:
                 self._lote = _Lote(aberto_em=agora, ultimo_em=agora)
                 self._tarefa = asyncio.create_task(self._vigiar())
-                log.info("Novo lote aberto")
+                log.info("Novo lote aberto | origem=%s", self.nome)
             lote = self._lote
             if chave is not None:
                 if chave in lote.vistos:
@@ -70,7 +71,8 @@ class AgrupadorAlertas:
             lote.alertas.append(alerta)
             lote.ultimo_em = agora
             if len(lote.alertas) >= self.max_alertas:
-                log.warning("Lote atingiu %d alertas; fechando antecipadamente", self.max_alertas)
+                log.warning("Lote origem=%s atingiu %d alertas; fechando antecipadamente",
+                            self.nome, self.max_alertas)
                 self._fechar_lote_sem_lock()
             return True
 
@@ -99,7 +101,8 @@ class AgrupadorAlertas:
         if not lote or not lote.alertas:
             return
         duracao = time.monotonic() - lote.aberto_em
-        log.info("Lote fechado: %d alerta(s) em %.0fs", len(lote.alertas), duracao)
+        log.info("Lote fechado | origem=%s | %d alerta(s) em %.0fs",
+                 self.nome, len(lote.alertas), duracao)
         tarefa = asyncio.create_task(self._executar(lote.alertas))
         self._em_processamento.add(tarefa)
         tarefa.add_done_callback(self._em_processamento.discard)
@@ -108,7 +111,8 @@ class AgrupadorAlertas:
         try:
             await self._processar(alertas)
         except Exception:  # noqa: BLE001 — um lote com erro não pode derrubar o servidor
-            log.exception("Falha ao processar lote de %d alerta(s)", len(alertas))
+            log.exception("Falha ao processar lote origem=%s com %d alerta(s)",
+                          self.nome, len(alertas))
 
     async def descarregar(self) -> None:
         """Fecha o lote atual imediatamente e espera todo processamento terminar (desligamento)."""
@@ -116,3 +120,4 @@ class AgrupadorAlertas:
             self._fechar_lote_sem_lock()
         if self._em_processamento:
             await asyncio.gather(*self._em_processamento, return_exceptions=True)
+
