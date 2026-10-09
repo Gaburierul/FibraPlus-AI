@@ -23,12 +23,13 @@ sys.path.insert(0, str(RAIZ))  # permite rodar de qualquer pasta, sem PYTHONPATH
 
 from dotenv import load_dotenv  # noqa: E402
 
-from noc.analyzer import MODELO_PADRAO, analisar  # noqa: E402
+load_dotenv(RAIZ / ".env")
+
+from noc.analyzer import MODELO_PADRAO, THINKING_NIVEIS, THINKING_PADRAO, analisar  # noqa: E402
 from noc.correlator import correlacionar  # noqa: E402
 from noc.enrich import enriquecer_com_zabbix  # noqa: E402
 from noc.parser import parse_alertas  # noqa: E402
 
-load_dotenv(RAIZ / ".env")
 CENARIOS = RAIZ / "samples" / "alertas"
 
 # Evita o erro 'charmap' com emojis no console do Windows
@@ -96,9 +97,9 @@ def processar(nome: str, texto: str, args) -> None:
 
     if resultado.analise:
         a = resultado.analise
-        print(f"\nConfiança: {a.confianca} | Classificação IA: {a.classificacao}")
+        print(f"\nConfiança declarada pela IA: {a.confianca}")
         if a.dados_faltantes:
-            print("Para confirmar: " + " | ".join(a.dados_faltantes))
+            print("Dados sugeridos para confirmar (validar): " + " | ".join(a.dados_faltantes))
         if args.json:
             print(json.dumps(a.model_dump(), ensure_ascii=False, indent=2))
     if resultado.tokens:
@@ -118,7 +119,7 @@ def main() -> None:
     p.add_argument("--zabbix", action="store_true", help="Enriquece com tags/status ao vivo do Zabbix")
     p.add_argument("--incluir-clientes", action="store_true", help="Não filtra alertas de clientes")
     p.add_argument("--janela", type=int, default=10, help="Minutos para agrupar alertas no mesmo incidente")
-    p.add_argument("--thinking", default="medium", choices=["minimal", "low", "medium", "high"])
+    p.add_argument("--thinking", default=THINKING_PADRAO, choices=THINKING_NIVEIS)
     p.add_argument("--json", action="store_true", help="Mostra a análise estruturada completa")
     args = p.parse_args()
 

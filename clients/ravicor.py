@@ -2,19 +2,31 @@
 Cliente API para o Ravicor.
 """
 import os
+from pathlib import Path
+from urllib.parse import urlsplit
 import requests
 from dotenv import load_dotenv
 
-# Força a leitura do arquivo .env no caminho exato
-load_dotenv(dotenv_path=r"C:\FibraPlus-AI\.env")
+RAIZ = Path(__file__).resolve().parent.parent
+load_dotenv(dotenv_path=RAIZ / ".env")
 
 class RavicorClient:
     def __init__(self):
         self.url = os.getenv("RAVICOR_URL")
         self.token = os.getenv("RAVICOR_TOKEN")
+        try:
+            self.timeout = float(os.getenv("RAVICOR_TIMEOUT_S", "15"))
+        except ValueError as exc:
+            raise ValueError("RAVICOR_TIMEOUT_S deve ser um número positivo.") from exc
         
         if not self.url or not self.token:
             raise ValueError("RAVICOR_URL e RAVICOR_TOKEN devem estar no .env")
+        partes_url = urlsplit(self.url)
+        if (partes_url.scheme not in {"http", "https"} or not partes_url.hostname
+                or partes_url.username or partes_url.password):
+            raise ValueError("RAVICOR_URL deve ser uma URL HTTP(S) válida, sem credenciais embutidas.")
+        if not 0 < self.timeout <= 120:
+            raise ValueError("RAVICOR_TIMEOUT_S deve estar entre 0 e 120 segundos.")
 
     def _call(self, action: str, operation: str, **extra_params) -> dict:
         """Faz a chamada POST com form-data padrão do Ravicor."""
@@ -25,9 +37,12 @@ class RavicorClient:
         }
         data.update(extra_params)
         
-        response = requests.post(self.url, data=data, timeout=15)
+        response = requests.post(self.url, data=data, timeout=self.timeout)
         response.raise_for_status()
-        return response.json()
+        resultado = response.json()
+        if not isinstance(resultado, dict):
+            raise ValueError("Resposta inválida da API Ravicor: esperado um objeto JSON.")
+        return resultado
 
     def list_device_groups(self) -> list:
         """Lista os grupos de dispositivos cadastrados."""
