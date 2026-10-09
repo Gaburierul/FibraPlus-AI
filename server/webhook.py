@@ -1,8 +1,10 @@
 """
-Servidor que recebe os alertas do Zabbix (webhook), agrupa, analisa e envia ao WhatsApp.
+Servidor que recebe alertas do Ravi e do Zabbix, analisa cada origem em lotes separados e envia ao mensageiro.
 
 Fluxo:
-    Zabbix --POST /zabbix/webhook--> fila (debounce) --> correlator --> Gemini --> Evolution API
+    Ravi --POST /ravi/webhook--> fila Ravi --+
+                                            +--> correlator --> Gemini --> mensageiro
+    Zabbix --POST /zabbix/webhook--> fila Zabbix --+
 
 Executar (na pasta do projeto):
     uvicorn server.webhook:app --host 127.0.0.1 --port 8089
@@ -125,9 +127,11 @@ def _processar_lote_sincrono(alertas: list[Alerta]) -> None:
         "incidentes": len(correlacao.incidentes),
         "clientes_filtrados": correlacao.clientes_filtrados,
         "modo_teste": MODO_TESTE,
+        "origens": sorted({a.origem.strip().upper() for a in alertas if a.origem.strip()}),
     }
     if not correlacao.incidentes:
-        log.info("Lote só com alertas de clientes (%d); nada a enviar", correlacao.clientes_filtrados)
+        log.info("Lote sem infraestrutura | origens=%s | alertas de clientes=%d; nada a enviar",
+                 "/".join(registro["origens"]) or "desconhecida", correlacao.clientes_filtrados)
         registro["acao"] = "ignorado_sem_infra"
         _registrar_envio(registro)
         return
@@ -177,7 +181,12 @@ async def _processar_lote(alertas: list[Alerta]) -> None:
     await asyncio.to_thread(_processar_lote_sincrono, alertas)
 
 
-agrupador = AgrupadorAlertas(_processar_lote, silencio_s=SILENCIO_S, espera_max_s=ESPERA_MAX_S)
+AGRUPADORES = {
+    "RAVI": AgrupadorAlertas(_processar_lote, silencio_s=SILENCIO_S,
+                             espera_max_s=ESPERA_MAX_S, nome="RAVI"),
+    "ZABBIX": AgrupadorAlertas(_processar_lote, silencio_s=SILENCIO_S,
+                               espera_max_s=ESPERA_MAX_S, nome="ZABBIX"),
+}
 
 
 @asynccontextmanager
@@ -187,8 +196,10 @@ async def _ciclo_de_vida(_: FastAPI):
              MODO_TESTE, USAR_IA, IA_NO_TESTE, IA_AUTO_ENVIO,
              SILENCIO_S, ESPERA_MAX_S, SEVERIDADE_MINIMA)
     yield
-    log.info("Encerrando: processando lote pendente (%d alerta[s])", agrupador.pendentes)
-    await agrupador.descarregar()
+    for origem, agrupador in AGRUPADORES.items():
+        log.info("Encerrando: processando lote pendente | origem=%s | %d alerta(s)",
+                 origem, agrupador.pendentes)
+        await agrupador.descarregar()
 
 
 app = FastAPI(title="FibraPlus NOC IA", lifespan=_ciclo_de_vida)
@@ -196,9 +207,12 @@ app = FastAPI(title="FibraPlus NOC IA", lifespan=_ciclo_de_vida)
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    pendentes_por_origem = {origem.lower(): agrupador.pendentes
+                            for origem, agrupador in AGRUPADORES.items()}
     return {"status": "ok", "modo_teste": MODO_TESTE,
             "ia_no_teste": IA_NO_TESTE, "ia_auto_envio": IA_AUTO_ENVIO,
-            "alertas_no_lote": agrupador.pendentes}
+            "alertas_no_lote": sum(pendentes_por_origem.values()),
+            "alertas_por_origem": pendentes_por_origem}
 
 
 @app.post("/ravi/webhook", status_code=202)
@@ -217,7 +231,9 @@ async def receber_ravi(request: Request, token: str = "", x_webhook_token: str =
         from noc.ravi_event import (payload_para_alerta_ravi, PayloadRaviIgnorado,
                                     PayloadRaviInvalido)
         alerta = payload_para_alerta_ravi(payload)
+        agrupador = AGRUPADORES["RAVI"]
         novo = await agrupador.adicionar(alerta)
+        log.info("%s %s", "Recebido Ravi" if novo else "Duplicado Ravi", resumo_curto(alerta))
         if not novo:
             return JSONResponse({"status": "duplicado", "alertas_no_lote": agrupador.pendentes}, status_code=202)
         return JSONResponse({"status": "na_fila_ravi", "alertas_no_lote": agrupador.pendentes}, status_code=202)
@@ -252,7 +268,9 @@ async def receber(request: Request, x_webhook_token: str = Header(default="")) -
     if not severidade_minima_ok(alerta, SEVERIDADE_MINIMA):
         return JSONResponse({"status": "ignorado", "motivo": "abaixo da severidade mínima"}, status_code=202)
 
+    agrupador = AGRUPADORES["ZABBIX"]
     novo = await agrupador.adicionar(alerta, chave=chave_evento(payload))
     log.info("%s %s", "Recebido" if novo else "Duplicado", resumo_curto(alerta))
     return JSONResponse({"status": "na_fila" if novo else "duplicado",
                          "alertas_no_lote": agrupador.pendentes}, status_code=202)
+
