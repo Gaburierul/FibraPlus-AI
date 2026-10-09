@@ -1,0 +1,24 @@
+🛑🛑 Problema: 🛑🛑
+Equipamento: LAB-SITE-A-BNG01
+IP: 192.0.2.10
+Nome do problema: Redução sintética de sessões PPPoE acima do limite
+Nível: High
+Iniciado às: 10:00:00 em 2025.01.15
+Tags: backbone: 1, component: pppoe
+
+🛑🛑 Problema: 🛑🛑
+Equipamento: LAB-SITE-A-PE01
+IP: 192.0.2.11
+Nome do problema: Peer BGP 2001:db8::13 não está ESTABLISHED
+Nível: Disaster
+Iniciado às: 10:02:00 em 2025.01.15
+Tags: backbone: 1, component: bgp
+
+✅✅ Resolvido: ✅✅
+Equipamento: LAB-SITE-A-PE01
+IP: 192.0.2.11
+Nome do problema: Peer BGP 2001:db8::13 não está ESTABLISHED
+Nível: Disaster
+Iniciado às: 10:02:00 em 2025.01.15
+Resolvido às: 10:07:00 em 2025.01.15
+Duração: 5m 0s

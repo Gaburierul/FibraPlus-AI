@@ -1,42 +1,13 @@
-[17:05, 06/10/2026] +55 67 9830-0525: 🛑🛑 Problema: 🛑🛑
-Equipamento: CPE-MSD-HUAWEI-PE01
-IP: 172.20.20.3
-Nome do problema: Interface 10GE1/4/1(SERVER-VMWARE-CLUSTER): Link down
-Nível: Average    
-Iniciado às: 17:05:27 em 2026.10.06
-[17:05, 06/10/2026] +55 67 9830-0525: 🛑🛑 Problema: 🛑🛑
-Equipamento: CPE-MSD-HUAWEI-PE01
-IP: 172.20.20.3
-Nome do problema: Interface 10GE1/4/2(SERVER-VMWARE-CLUSTER): Link down
-Nível: Average    
-Iniciado às: 17:05:28 em 2026.10.06
-[17:05, 06/10/2026] +55 67 9830-0525: 🛑🛑 Problema: 🛑🛑
-Equipamento: CPE-MSD-HUAWEI-PE01
-IP: 172.20.20.3
-Nome do problema: Interface Vlanif998(GERENCIA-PROXMOX): Link down
-Nível: Average    
-Iniciado às: 17:05:45 em 2026.10.06
-[17:07, 06/10/2026] +55 67 9830-0525: 🛑🛑 Problema: 🛑🛑
-Equipamento: CPE-MSD-HUAWEI-PE01
-IP: 172.20.20.3
-Nome do problema: Interface 10GE1/2/15(CCR-FIREWALL): Link down
-Nível: Average    
-Iniciado às: 17:07:01 em 2026.10.06
-[17:24, 06/10/2026] +55 67 9830-0525: 🛑🛑 Problema: 🛑🛑
-Equipamento: CPE-SPIPE-CALARGE-HUAWEI-VS02-RR01
-IP: 172.20.20.251
-Nome do problema: 2804:9220:E000::8A não está ESTABLISHED
-Nível: Disaster    
-Iniciado às: 17:24:03 em 2026.10.06
-[17:24, 06/10/2026] +55 67 9830-0525: 🛑🛑 Problema: 🛑🛑
-Equipamento: CPE-MSD-HUAWEI-VS02-RR
-IP: 172.20.20.250
-Nome do problema: 2804:9220:E000::8A não está ESTABLISHED
-Nível: Disaster    
-Iniciado às: 17:24:06 em 2026.10.06
-[17:24, 06/10/2026] +55 67 9830-0525: 🛑🛑 Problema: 🛑🛑
-Equipamento: CPE-MSD-HUAWEI-BNG01
-IP: 10.1.1.4
-Nome do problema: {ITEM.NAME1}: queda de 50% ou mais nos clientes PPPoE conectados
-Nível: High    
-Iniciado às: 17:24:49 em 2026.10.06
+[10:05, 15/01/2025] NOC-TESTE: 🛑🛑 Problema: 🛑🛑
+Equipamento: LAB-SITE-H-PE01
+IP: 192.0.2.40
+Nome do problema: Peer BGP sintético não está ESTABLISHED
+Nível: Average
+Iniciado às: 10:05:00 em 2025.01.15
+
+[10:06, 15/01/2025] NOC-TESTE: 🛑🛑 Problema: 🛑🛑
+Equipamento: LAB-SITE-H-OLT01
+IP: 192.0.2.41
+Nome do problema: Perda sintética de comunicação com OLT de laboratório
+Nível: Average
+Iniciado às: 10:06:00 em 2025.01.15
