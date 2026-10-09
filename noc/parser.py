@@ -4,8 +4,8 @@ Parser das mensagens de alerta do Zabbix (formato enviado ao WhatsApp).
 Formato esperado (tolerante a variações, emojis, acentos e espaços extras):
 
     🛑🛑 Problema: 🛑🛑
-    Equipamento: CPE-MSD-HUAWEI-BNG01
-    IP: 10.1.1.4
+    Equipamento: CPE-EXEMPLO-HUAWEI-BNG01
+    IP: 192.0.2.10
     Nome do problema: ...
     Nível: High
     Iniciado às: 15:42:47 em 2026.10.06
@@ -80,6 +80,8 @@ class Alerta:
     fim: Optional[datetime] = None
     duracao: Optional[str] = None
     tags: dict[str, str] = field(default_factory=dict)
+
+    origem: str = "ZABBIX"
     avisos: list[str] = field(default_factory=list)
 
     @property

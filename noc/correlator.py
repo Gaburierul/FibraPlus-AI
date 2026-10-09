@@ -64,8 +64,8 @@ def decompor_hostname(host: str) -> tuple[str, str, Optional[str]]:
     """
     Separa o hostname no padrão FibraPlus em (site, funcao, fabricante).
 
-    Ex.: 'CPE-SPIPE-CALARGE-HUAWEI-VS02-RR01' -> ('CPE-SPIPE-CALARGE', 'VS02-RR01', 'HUAWEI')
-         'FIGE-IDC-DATACOM-PE01'              -> ('FIGE-IDC', 'PE01', 'DATACOM')
+    Ex.: 'CPE-EXEMPLO-HUAWEI-VS02-RR01' -> ('CPE-EXEMPLO', 'VS02-RR01', 'HUAWEI')
+         'EXEMPLO-POP-DATACOM-PE01'     -> ('EXEMPLO-POP', 'PE01', 'DATACOM')
     """
     partes = [p for p in re.split(r"[-_\s]+", host.strip().upper()) if p]
     for i, parte in enumerate(partes):
@@ -127,6 +127,7 @@ class Ocorrencia:
     avisos: list[str]
     ultimo_evento: Optional[datetime] = None  # último início/resolução visto no lote
     ativo_no_zabbix: Optional[bool] = None  # preenchido pelo enriquecimento
+    origens: list[str] = field(default_factory=list)
 
     @property
     def peso(self) -> Optional[tuple[int, str]]:
@@ -158,6 +159,7 @@ class Ocorrencia:
             "classificacao_regra": self.classificacao,
             "classificacao_origem": "tag" if p else "severidade_zabbix",
             "ativo_no_zabbix_agora": self.ativo_no_zabbix,
+            "origens": self.origens,
             "avisos": self.avisos,
         }
 
@@ -277,6 +279,7 @@ def _consolidar(alertas: list[Alerta]) -> list[Ocorrencia]:
             tags=tags,
             avisos=avisos,
             ultimo_evento=max(datas_validas + fins) if (datas_validas or fins) else None,
+            origens=sorted({a.origem.strip().upper() for a in grupo if a.origem.strip()}),
         ))
     return ocorrencias
 
@@ -286,12 +289,12 @@ def _agrupar_por_tempo(ocorrencias: list[Ocorrencia], janela_min: int) -> list[I
     sem_data = [o for o in ocorrencias if not o.inicio]
 
     incidentes: list[Incidente] = []
-    ultimo: Optional[datetime] = None
+    inicio_janela: Optional[datetime] = None
     for o in com_data:
-        if ultimo is None or (o.inicio - ultimo).total_seconds() > janela_min * 60:
+        if inicio_janela is None or (o.inicio - inicio_janela).total_seconds() > janela_min * 60:
             incidentes.append(Incidente(id=len(incidentes) + 1))
+            inicio_janela = o.inicio
         incidentes[-1].ocorrencias.append(o)
-        ultimo = o.inicio
     if sem_data:
         incidentes.append(Incidente(id=len(incidentes) + 1, ocorrencias=sem_data))
     return incidentes

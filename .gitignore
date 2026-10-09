@@ -12,3 +12,13 @@ __pycache__/
 # IDEs
 .vscode/
 .idea/
+
+# Logs e dados locais gerados
+logs/*.log
+logs/*.jsonl
+logs/*.txt
+logs/*.db
+logs/*.sqlite3
+logs/*.sqlite3-*
+resumo_dia_07.json
+samples/alertas/09_ativos_zabbix.txt

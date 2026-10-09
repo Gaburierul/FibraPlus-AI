@@ -1,2 +1,7 @@
 requests>=2.31.0
 python-dotenv>=1.0.0
+google-genai>=2.3.0
+pydantic>=2.0
+fastapi>=0.110
+uvicorn>=0.29
+mcp>=1.0.0
