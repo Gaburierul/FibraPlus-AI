@@ -91,7 +91,7 @@ Para realizar qualquer busca (equipamento, cliente, cidade, protocolo, plantão 
 ```powershell
 # Problemas ativos agora (ou filtrando por equipamento/termo):
 .\.venv\Scripts\python.exe scripts\consultar.py
-.\.venv\Scripts\python.exe scripts\consultar.py RRP-ESCRITORIO
+.\.venv\Scripts\python.exe scripts\consultar.py EXEMPLO-PE01
 .\.venv\Scripts\python.exe scripts\consultar.py ospf --horas 12
 
 # Relatório de plantão (noturno 18:00→07:59 ou diurno 08:00→17:59) com exportação Markdown:

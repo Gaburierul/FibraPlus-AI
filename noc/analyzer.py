@@ -393,13 +393,13 @@ def _problema_para_exibicao(valor: str) -> str:
         "optica": "óptica",
     }
     for original, corrigido in correcoes.items():
-        def preservar_caixa(match: re.Match[str]) -> str:
+        def preservar_caixa(match: re.Match[str], substituto: str = corrigido) -> str:
             palavra = match.group()
             if palavra.isupper():
-                return corrigido.upper()
+                return substituto.upper()
             if palavra[:1].isupper():
-                return corrigido.capitalize()
-            return corrigido
+                return substituto.capitalize()
+            return substituto
 
         texto = re.sub(rf"\b{original}\b", preservar_caixa, texto, flags=re.IGNORECASE)
     return texto

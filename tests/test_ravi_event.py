@@ -123,7 +123,7 @@ class RaviEventTests(unittest.TestCase):
                 "🚨 *ALERTA DE PROBLEMA MASSIVO*\n\n"
                 "*Localização do Problema*\n"
                 "- OLT: OLT NOVA ALVORADA\n"
-                "- Endereço IP: 10.60.8.2\n"
+                "- Endereço IP: 192.0.2.82\n"
                 "- PON Afetada: Slot 1 / PON 7\n\n"
                 "⚠️ *Detalhes do Incidente*\n"
                 "- ONTs Offline: 28 unidades\n"
@@ -140,7 +140,7 @@ class RaviEventTests(unittest.TestCase):
                 "🚨 *ALERTA DE PROBLEMA MASSIVO*\n\n"
                 "*Localização do Problema*\n"
                 "- OLT: OLT NOVA ALVORADA\n"
-                "- Endereço IP: 10.60.8.2\n"
+                "- Endereço IP: 192.0.2.82\n"
                 "- PON Afetada: Slot 2 / PON 7\n\n"
                 "⚠️ *Detalhes do Incidente*\n"
                 "- ONTs Offline: 53 unidades"
@@ -149,7 +149,7 @@ class RaviEventTests(unittest.TestCase):
 
         self.assertEqual(p1.status, PROBLEMA)
         self.assertEqual(p1.equipamento, "OLT NOVA ALVORADA")
-        self.assertEqual(p1.ip, "10.60.8.2")
+        self.assertEqual(p1.ip, "192.0.2.82")
         self.assertEqual(p1.problema, "Slot 1 / PON 7: Queda massiva (28 unidades offline)")
         self.assertEqual(p1.tags.get("item_chave"), "Slot 1 / PON 7")
 
@@ -170,7 +170,7 @@ class RaviEventTests(unittest.TestCase):
                 "🚨 *ALERTA DE PROBLEMA MASSIVO*\n\n"
                 "*Localização do Problema*\n"
                 "- OLT: OLT NOVA ALVORADA\n"
-                "- Endereço IP: 10.60.8.2\n"
+                "- Endereço IP: 192.0.2.82\n"
                 "- PON Afetada: Slot 1 / PON 7\n\n"
                 "⚠️ *Detalhes do Incidente*\n"
                 "- ONTs Offline: 21 unidades"
@@ -185,7 +185,7 @@ class RaviEventTests(unittest.TestCase):
                 "✅ *PROBLEMA MASSIVO RESOLVIDO*\n\n"
                 "*Localização*\n"
                 "- OLT: OLT NOVA ALVORADA\n"
-                "- Endereço IP: 10.60.8.2\n"
+                "- Endereço IP: 192.0.2.82\n"
                 "- PON Restaurada: Slot 1 / PON 7\n\n"
                 "*Status da Resolução*\n"
                 "- ONTs Reconectadas: 21 unidades\n\n"
@@ -196,7 +196,7 @@ class RaviEventTests(unittest.TestCase):
 
         self.assertEqual(res.status, RESOLVIDO)
         self.assertEqual(res.equipamento, "OLT NOVA ALVORADA")
-        self.assertEqual(res.ip, "10.60.8.2")
+        self.assertEqual(res.ip, "192.0.2.82")
         self.assertEqual(res.problema, "Slot 1 / PON 7: Normalizado (21 unidades reconectadas)")
         self.assertEqual(res.duracao, "15 minutos")
         self.assertEqual(res.tags.get("item_chave"), "Slot 1 / PON 7")

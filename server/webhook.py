@@ -338,7 +338,7 @@ async def receber_ravi(request: Request, token: str = "", x_webhook_token: str =
         return JSONResponse({"status": "ignorado", "motivo": str(exc)}, status_code=202)
     except PayloadRaviInvalido as exc:
         log.warning("Payload Ravi ignorado/inválido: %s", exc)
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         log.error("Falha inesperada no parser do Ravi (%s)", type(exc).__name__)
         return JSONResponse({"status": "erro_interno"}, status_code=500)
@@ -355,7 +355,7 @@ async def receber(request: Request, x_webhook_token: str = Header(default="")) -
         alerta = payload_para_alerta(payload)
     except PayloadInvalido as exc:
         log.warning("Payload inválido: %s", exc)
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if not severidade_minima_ok(alerta, SEVERIDADE_MINIMA):
         return JSONResponse({"status": "ignorado", "motivo": "abaixo da severidade mínima"}, status_code=202)

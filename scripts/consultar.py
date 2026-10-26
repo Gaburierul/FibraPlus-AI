@@ -7,7 +7,7 @@ técnico, no nome do problema e nas tags. Vários termos = todos precisam casar.
 
 Exemplos:
     python scripts/consultar.py                                  # problemas ativos agora
-    python scripts/consultar.py RRP-ESCRITORIO                   # ativos de um equipamento
+    python scripts/consultar.py EXEMPLO-PE01                   # ativos de um equipamento
     python scripts/consultar.py ospf --horas 12                  # histórico por assunto
     python scripts/consultar.py prefeitura --desde "2026-10-20 18:00" --ate "2026-10-21 08:00"
     python scripts/consultar.py --plantao noturno --data 2026-10-23 --md
