@@ -46,13 +46,15 @@ def _tags(bruto: Any) -> dict[str, str]:
             bruto = json.loads(bruto)
         except json.JSONDecodeError:
             return {}
-    if isinstance(bruto, dict):
-        return {str(k).strip().lower(): str(v).strip() for k, v in bruto.items()}
     tags: dict[str, str] = {}
+    if isinstance(bruto, dict):
+        for k, v in list(bruto.items())[:30]:
+            tags[str(k).strip().lower()[:60]] = str(v).strip()[:150]
+        return tags
     if isinstance(bruto, list):
-        for item in bruto:
+        for item in bruto[:30]:
             if isinstance(item, dict) and item.get("tag"):
-                tags[str(item["tag"]).strip().lower()] = str(item.get("value", "")).strip()
+                tags[str(item["tag"]).strip().lower()[:60]] = str(item.get("value", "")).strip()[:150]
     return tags
 
 
@@ -75,8 +77,8 @@ def payload_para_alerta(payload: dict[str, Any]) -> Alerta:
     if not event_id.isdigit():
         raise PayloadInvalido("event_id ausente ou inválido (esperado ID numérico do Zabbix)")
 
-    equipamento = _texto(payload, "host_name")
-    problema = _texto(payload, "event_name")
+    equipamento = _texto(payload, "host_name")[:200]
+    problema = _texto(payload, "event_name")[:500]
     if not equipamento or not problema:
         raise PayloadInvalido("campos obrigatórios ausentes: host_name e event_name")
 
@@ -86,7 +88,7 @@ def payload_para_alerta(payload: dict[str, Any]) -> Alerta:
     status = RESOLVIDO if valor == "0" else PROBLEMA
 
     alerta = Alerta(status=status, equipamento=equipamento, problema=problema,
-                    ip=_texto(payload, "host_ip") or None)
+                    ip=_texto(payload, "host_ip")[:100] or None)
 
     nsev = _texto(payload, "event_nseverity")
     if nsev.isdigit() and int(nsev) in _NOME_SEVERIDADE:

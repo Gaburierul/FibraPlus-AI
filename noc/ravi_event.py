@@ -42,9 +42,18 @@ class PayloadRaviInvalido(ValueError):
 class PayloadRaviIgnorado(PayloadRaviInvalido):
     """Payload válido para transporte, mas que não representa um alerta acionável."""
 
+def _limpar_formatacao_markdown(texto: str) -> str:
+    """Remove marcações comuns de WhatsApp/Telegram/Markdown (*, _, ~, `) preservando o conteúdo."""
+    if not texto:
+        return ""
+    t = re.sub(r"[*~`]+", " ", texto)
+    t = re.sub(r"(?<!\w)_+|_+(?!\w)", " ", t)
+    return " ".join(t.split())
+
+
 def _extrair_campo(regex: str, texto: str) -> str:
-    m = re.search(regex, texto, re.IGNORECASE)
-    return m.group(1).strip() if m else ""
+    m = re.search(rf"^\s*(?:[-•]\s+)?{regex}", texto, re.IGNORECASE | re.MULTILINE)
+    return _limpar_formatacao_markdown(m.group(1).strip()) if m else ""
 
 
 def _valor_payload(payload: dict, *chaves: str) -> Any:
@@ -135,9 +144,14 @@ def _parse_datahora_ravi(valor: Any) -> datetime | None:
 
 
 def _duracao_payload(payload: dict, texto: str) -> str | None:
-    valor = _valor_payload(payload, "event_duration", "duration", "duracao", "duração")
+    valor = _valor_payload(
+        payload, "event_duration", "duration", "duracao", "duração", "tempo_decorrido"
+    )
     if valor is None:
-        valor = _extrair_campo(r"(?:Duração|Duracao|Duration):\s*([^\n]+)", texto)
+        valor = _extrair_campo(
+            r"(?:\*|_)?\b(?:Dura[cç][aã]o|Duration|Tempo\s+decorrido|Problema\s+resolvido\s+em)\b(?:\*|_)?:\s*([^\n]+)",
+            texto,
+        )
     return str(valor).strip() or None if valor is not None else None
 
 
@@ -207,7 +221,10 @@ def payload_para_alerta_ravi(payload: dict) -> Alerta:
         eh_problema, eh_resolvido = estado_payload == PROBLEMA, estado_payload == RESOLVIDO
 
     severidade_explicita = _severidade_explicita(payload, texto)
-    problema_desc = _extrair_campo(r"Problema:\s*([^\n]+)", texto)
+    problema_desc = _extrair_campo(r"(?:\*|_)?\bProblema\b(?:\*|_)?:\s*([^\n]+)", texto)
+    status_desc = _extrair_campo(
+        r"(?:\*|_)?\b(?:Status|Descri[cç][aã]o|Motivo)\b(?:\*|_)?:\s*([^\n]+)", texto
+    )
     if (not eh_problema and not eh_resolvido and problema_desc
             and severidade_explicita is not None and severidade_explicita[0] >= 2):
         # Syslog sem palavras de estado: só aceitar como problema se trouxer
@@ -222,27 +239,60 @@ def payload_para_alerta_ravi(payload: dict) -> Alerta:
     status = RESOLVIDO if (eh_resolvido and not eh_problema) else PROBLEMA
 
     # Extrai os campos do texto (Ex: "Dispositivo: CDN STAR (ROTAS)")
-    dispositivo = _extrair_campo(r"Dispositivo:\s*([^\n]+)", texto)
+    dispositivo = _extrair_campo(r"(?:\*|_)?\bDispositivo\b(?:\*|_)?:\s*([^\n]+)", texto)
     if not dispositivo:
         # Se não tiver 'Dispositivo:', tenta 'OLT:' ou 'Equipamento:'
-        dispositivo = _extrair_campo(r"(?:OLT|Equipamento):\s*([^\n]+)", texto)
+        dispositivo = _extrair_campo(r"(?:\*|_)?\b(?:OLT|Equipamento)\b(?:\*|_)?:\s*([^\n]+)", texto)
+    if not dispositivo and isinstance(payload.get("dispositivo"), str):
+        dispositivo = _limpar_formatacao_markdown(payload["dispositivo"].strip())
 
     if not dispositivo:
         dispositivo = "Desconhecido (Ravi)"
 
-    ip = _extrair_campo(r"IP:\s*([^\n]+)", texto)
-    sensor = _extrair_campo(r"Sensor:\s*([^\n]+)", texto)
+    ip = _extrair_campo(
+        r"(?:\*|_)?\b(?:Endere[cç]o\s+IP|IP)\b(?:\*|_)?:\s*([^\n]+)", texto
+    )
+    if not ip and isinstance(payload.get("ip"), str):
+        ip = _limpar_formatacao_markdown(payload["ip"].strip())
+    sensor = _extrair_campo(r"(?:\*|_)?\bSensor\b(?:\*|_)?:\s*([^\n]+)", texto)
+    nome_item = _extrair_campo(
+        r"(?:\*|_)?\b(?:Nome|Interface|Porta|PON(?:\s+Afetada|\s+Restaurada)?)\b(?:\*|_)?:\s*([^\n]+)",
+        texto,
+    )
 
-    descricao = problema_desc
-    if sensor and problema_desc:
-        descricao = f"Sensor {sensor}: {problema_desc}"
+    detalhe_desc = problema_desc or status_desc
+    if not detalhe_desc:
+        onts_offline = _extrair_campo(
+            r"(?:\*|_)?\bONTs?\s+Offline\b(?:\*|_)?:\s*([^\n]+)", texto
+        )
+        onts_reconectadas = _extrair_campo(
+            r"(?:\*|_)?\bONTs?\s+(?:Reconectadas|Restauradas|Online)\b(?:\*|_)?:\s*([^\n]+)",
+            texto,
+        )
+        if onts_offline:
+            detalhe_desc = f"Queda massiva ({onts_offline} offline)"
+        elif onts_reconectadas:
+            detalhe_desc = f"Normalizado ({onts_reconectadas} reconectadas)"
+
+    descricao = detalhe_desc
+    if sensor and detalhe_desc:
+        descricao = f"Sensor {sensor}: {detalhe_desc}"
     elif sensor:
         descricao = f"Sensor {sensor}"
+    elif nome_item and detalhe_desc:
+        descricao = f"{nome_item}: {detalhe_desc}"
+    elif nome_item:
+        descricao = nome_item
     if not descricao:
-        descricao = "Queda/Indisponibilidade detectada"
+        descricao = (
+            "Funcionamento normalizado"
+            if status == RESOLVIDO
+            else "Queda/Indisponibilidade detectada"
+        )
 
     # Aceita início e resolução separados. O campo genérico "data" costuma
-    # representar o horário do evento notificado pelo Ravi.
+    # representar o horário de despacho do webhook; a data explícita no texto
+    # da mensagem tem precedência sobre o envelope genérico "data".
     inicio_valor = _valor_payload(
         payload, "event_start", "started_at", "start_time", "inicio", "iniciado_em"
     )
@@ -272,7 +322,7 @@ def payload_para_alerta_ravi(payload: dict) -> Alerta:
         fim = _parse_datahora_ravi(fim_txt) if fim_txt else None
 
     evento_valor = _valor_payload(
-        payload, "event_timestamp", "occurred_at", "timestamp", "datetime", "data", "date"
+        payload, "event_timestamp", "occurred_at", "timestamp", "datetime"
     )
     evento = _parse_datahora_ravi(evento_valor)
     if evento is None:
@@ -280,8 +330,13 @@ def payload_para_alerta_ravi(payload: dict) -> Alerta:
             payload, ("event_date", "date_event"), ("event_time", "time_event")
         ))
     if evento is None:
-        evento_txt = _extrair_campo(r"(?:Data|Data e hora|Date):\s*([^\n]+)", texto)
+        evento_txt = _extrair_campo(
+            r"(?:\*|_)?\b(?:Data(?:\s+atual|\s+e\s+hora)?|Date|Hor[aá]rio)\b(?:\*|_)?:\s*([^\n]+)",
+            texto,
+        )
         evento = _parse_datahora_ravi(evento_txt) if evento_txt else None
+    if evento is None:
+        evento = _parse_datahora_ravi(_valor_payload(payload, "data", "date"))
     if evento is not None:
         if status == RESOLVIDO and fim is None:
             fim = evento
@@ -302,9 +357,9 @@ def payload_para_alerta_ravi(payload: dict) -> Alerta:
 
     alerta = Alerta(
         status=status,
-        equipamento=dispositivo,
-        problema=descricao,
-        ip=ip if ip else None,
+        equipamento=dispositivo[:200],
+        problema=descricao[:500],
+        ip=ip[:100] if ip else None,
         nivel=nivel,
         severidade=severidade,
         inicio=inicio,
@@ -315,9 +370,12 @@ def payload_para_alerta_ravi(payload: dict) -> Alerta:
 
     if tipo:
         alerta.tags["tipo"] = tipo
+    item_chave = sensor or nome_item
+    if item_chave:
+        alerta.tags["item_chave"] = item_chave
     if severidade_explicita is None:
         alerta.avisos.append("Severidade não fornecida pelo Ravi; classificação mantida conservadora")
-    if not problema_desc:
+    if not detalhe_desc and not sensor and not nome_item:
         alerta.avisos.append("Descrição do problema ausente; usado texto genérico")
     if not ip:
         alerta.avisos.append("IP ausente no payload do Ravi")

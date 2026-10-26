@@ -70,7 +70,7 @@ python scripts/ai_noc_analyzer.py --arquivo samples/alertas/07_entrada_user.txt 
 
 Para escolher o esforço de raciocínio, use `--thinking low|medium|high` (ou `minimal` nos modelos que aceitam esse nível). O padrão é `NOC_AI_THINKING`; as requisições Gemini têm timeout configurado por `GEMINI_TIMEOUT_S`.
 
-O Gemini usa `gemini-3.5-flash-lite` por padrão e `NOC_AI_THINKING=minimal`; `low`, `medium` e `high` podem ser escolhidos quando a análise exigir mais raciocínio. A resposta da IA é limitada a 1.024 tokens e cada análise faz no máximo uma chamada; em falhas da API, o sistema usa o resumo determinístico sem insistir em novas chamadas. As chamadas de envio ao Telegram e Evolution usam timeout configurável por `MESSAGING_TIMEOUT_S`. Em falhas de rede, o cliente não repete automaticamente um POST de envio, pois a API pode ter aceitado a mensagem antes da conexão cair; novas tentativas ficam restritas a respostas HTTP 429.
+O Gemini usa `gemini-3.5-flash-lite` por padrão e `NOC_AI_THINKING=minimal`; `low`, `medium` e `high` podem ser escolhidos quando a análise exigir mais raciocínio. A resposta da IA é limitada a 1.024 tokens e cada análise faz no máximo uma chamada; em falhas da API, o sistema usa o resumo determinístico sem insistir em novas chamadas. As chamadas de envio ao Telegram e Evolution usam timeout configurável por `MESSAGING_TIMEOUT_S`. No Telegram, falhas de conexão (`ConnectionError`) e HTTP 429 são repetidas com backoff, enquanto timeouts de leitura HTTP não são repetidos automaticamente (pois a API pode ter aceitado a mensagem antes da leitura expirar).
 
 Alertas do Ravi usam a severidade explícita que vier no payload (0 a 5 ou rótulo reconhecido). Quando ela não é fornecida, o sistema marca a severidade como desconhecida e evita elevar um evento a crítico apenas por mencionar OLT, rota ou link. Campos ausentes de IP, horário, equipamento ou descrição ficam registrados como avisos para limitar conclusões da IA. A classificação de tags topológicas do Zabbix continua definida em `docs/regras_tags_zabbix.md`.
 
@@ -83,6 +83,39 @@ Use `RAVI_WEBHOOK_TOKEN` e `ZABBIX_WEBHOOK_TOKEN` diferentes. O Ravi pode contin
 Para exibir horário nos alertas do Ravi, inclua no payload a data e hora do evento (`data`/`timestamp`, `event_date` + `event_time` ou a data no texto da mensagem). Para mostrar duração, envie `event_duration`/`duration` ou os horários de início e resolução. O sistema não estima duração quando esses dados não chegam.
 
 O relatório de ativos não envia mensagem por padrão e não chama Gemini implicitamente. `python scripts/relatorio_ativos.py --horas 1 --enviar` consulta o Zabbix, gera o resumo determinístico e envia a mensagem. Acrescente `--usar-ia` para autorizar uma chamada Gemini e acrescentar uma hipótese breve e não confirmada. `--offline` continua disponível como alias explícito. `NOC_AI_AUTO_SEND` controla apenas a hipótese de IA nos envios automáticos do webhook.
+
+## 🛠️ Scripts Operacionais, Consultas e Testes
+
+Para realizar qualquer busca (equipamento, cliente, cidade, protocolo, plantão ou período), use o consultor unificado `scripts/consultar.py` em vez de criar scripts temporários:
+
+```powershell
+# Problemas ativos agora (ou filtrando por equipamento/termo):
+.\.venv\Scripts\python.exe scripts\consultar.py
+.\.venv\Scripts\python.exe scripts\consultar.py RRP-ESCRITORIO
+.\.venv\Scripts\python.exe scripts\consultar.py ospf --horas 12
+
+# Relatório de plantão (noturno 18:00→07:59 ou diurno 08:00→17:59) com exportação Markdown:
+.\.venv\Scripts\python.exe scripts\consultar.py --plantao noturno --md
+.\.venv\Scripts\python.exe scripts\consultar.py --plantao diurno --data 2026-10-26 --md
+
+# Correlacionar janela e enviar ao grupo (sem IA por padrão; adicione --usar-ia se desejar):
+.\.venv\Scripts\python.exe scripts\consultar.py --horas 1 --analisar --enviar
+
+# Diagnóstico consolidado do NOC (webhook, logs, Zabbix e Ravi):
+.\.venv\Scripts\python.exe scripts\verificar_noc.py --zabbix
+
+# Monitor contínuo de infraestrutura (ignora quedas isoladas de ONU de cliente):
+.\.venv\Scripts\python.exe scripts\monitor_infra_continuo.py
+
+# Testar envio e descobrir grupos no Telegram / Evolution API:
+.\.venv\Scripts\python.exe scripts\testar_telegram.py
+.\.venv\Scripts\python.exe scripts\descobrir_grupo_telegram.py
+.\.venv\Scripts\python.exe scripts\listar_grupos_evolution.py
+
+# Executar suíte de testes unitários e linter:
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check . --exclude .venv --select F,E9
+```
 
 ## Integração do Zabbix sem Media Type
 
@@ -121,9 +154,12 @@ O script `zabbix/webhook_fibraplus_ia.js` permanece como alternativa caso um adm
 * `noc/parser.py`: Limpa a string do WhatsApp e extrai os alertas individuais.
 * `noc/correlator.py`: Junta eventos de uma mesma janela de tempo em `Incidentes`.
 * `noc/analyzer.py`: Encapsula o Pydantic + Interações da API do Gemini para saída estruturada.
-* `clients/`: Conectores para Zabbix e Ravicor.
-* `scripts/`: Entrypoints para rodar no terminal.
-* `samples/`: Casos de testes com logs reais para validação do modelo.
+* `noc/consulta.py`: Motor genérico de consulta, filtragem e agrupamento de eventos/problemas do Zabbix.
+* `clients/`: Conectores para Zabbix, Ravicor, Telegram e WhatsApp (Evolution API), além do despachante unificado `mensageiro.py`.
+* `server/webhook.py`: Servidor FastAPI que recebe webhooks do Zabbix e do Ravi com filas de debounce isoladas.
+* `scripts/`: Ferramentas de operação, polling (`poller_zabbix.py`), consulta unificada (`consultar.py`) e diagnóstico (`verificar_noc.py`).
+* `samples/`: Casos de testes sintéticos para validação do modelo.
 
 ## 📝 Regras de Negócio
 A classificação de Severidade da IA respeita topologia. Tags nativas do Zabbix (`backbone`, `edge`) ditam o peso do alerta de `1` (Crítico) a `3` (Informativo), ignorando a severidade puramente técnica da trigger. Ver detalhes em `docs/regras_tags_zabbix.md`.
+

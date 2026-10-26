@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import re
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -44,10 +45,13 @@ from fastapi.responses import JSONResponse
 RAIZ = Path(__file__).resolve().parent.parent
 load_dotenv(RAIZ / ".env")
 
-from noc.analyzer import analisar  # noqa: E402  (precisa do .env carregado)
+from clients.mensageiro import enviar_mensagem  # noqa: E402
+from noc.analyzer import ResultadoAnalise, analisar, mensagem_fallback  # noqa: E402  (precisa do .env carregado)
 from noc.correlator import correlacionar  # noqa: E402
 from noc.debounce import AgrupadorAlertas  # noqa: E402
 from noc.parser import Alerta  # noqa: E402
+from noc.ravi_event import (chave_evento_ravi, payload_para_alerta_ravi,  # noqa: E402
+                            PayloadRaviIgnorado, PayloadRaviInvalido)
 from noc.zabbix_event import (PayloadInvalido, chave_evento, eh_atualizacao,  # noqa: E402
                               payload_para_alerta, severidade_minima_ok)
 
@@ -157,23 +161,33 @@ if not MODO_TESTE:
             raise RuntimeError("EVOLUTION_GROUP_JID ausente no .env.")
 
 
+_ENVIO_LOCK = threading.Lock()
+
+
 def _registrar_envio(registro: dict[str, Any]) -> None:
-    with open(PASTA_LOGS / "envios.jsonl", "a", encoding="utf-8") as f:
-        f.write(json.dumps(registro, ensure_ascii=False, default=str) + "\n")
+    with _ENVIO_LOCK:
+        with open(PASTA_LOGS / "envios.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(registro, ensure_ascii=False, default=str) + "\n")
 
 
 def _processar_lote_sincrono(alertas: list[Alerta]) -> None:
     """Roda em thread separada: correlator e Gemini fazem I/O bloqueante."""
-    correlacao = correlacionar(alertas, janela_min=10)
+    origens_lista = sorted({a.origem.strip().upper() for a in alertas if a.origem.strip()})
+    try:
+        correlacao = correlacionar(alertas, janela_min=10)
+    except Exception as exc:  # noqa: BLE001
+        log.error("Falha ao correlacionar alertas (%s)", type(exc).__name__, exc_info=True)
+        correlacao = None
+
     registro: dict[str, Any] = {
         "quando": datetime.now().isoformat(timespec="seconds"),
         "alertas": len(alertas),
-        "incidentes": len(correlacao.incidentes),
-        "clientes_filtrados": correlacao.clientes_filtrados,
+        "incidentes": len(correlacao.incidentes) if correlacao is not None else 0,
+        "clientes_filtrados": correlacao.clientes_filtrados if correlacao is not None else 0,
         "modo_teste": MODO_TESTE,
-        "origens": sorted({a.origem.strip().upper() for a in alertas if a.origem.strip()}),
+        "origens": origens_lista,
     }
-    if not correlacao.incidentes:
+    if correlacao is not None and not correlacao.incidentes:
         log.info("Lote sem infraestrutura | origens=%s | alertas de clientes=%d; nada a enviar",
                  "/".join(registro["origens"]) or "desconhecida", correlacao.clientes_filtrados)
         registro["acao"] = "ignorado_sem_infra"
@@ -181,7 +195,21 @@ def _processar_lote_sincrono(alertas: list[Alerta]) -> None:
         return
 
     usar_ia_no_lote = USAR_IA and ((MODO_TESTE and IA_NO_TESTE) or (not MODO_TESTE and IA_AUTO_ENVIO))
-    resultado = analisar(correlacao, usar_ia=usar_ia_no_lote)
+    if correlacao is not None:
+        try:
+            resultado = analisar(correlacao, usar_ia=usar_ia_no_lote)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Falha na análise (%s); usando fallback", type(exc).__name__, exc_info=True)
+            resultado = ResultadoAnalise(
+                mensagem=mensagem_fallback(correlacao, "falha interna na análise"),
+                origem="fallback",
+                erros=[type(exc).__name__],
+            )
+    else:
+        origem_str = "/".join(origens_lista) or "MONITORAMENTO"
+        msg = f"⚠️ Falha ao resumir {len(alertas)} alertas de {origem_str}; consulte o painel de monitoramento."
+        resultado = ResultadoAnalise(mensagem=msg, origem="fallback", erros=["falha_correlacao"])
+
     registro.update(origem=resultado.origem, erros=resultado.erros, tokens=resultado.tokens,
                     caracteres_mensagem=len(resultado.mensagem))
     if MODO_TESTE and USAR_IA and not IA_NO_TESTE:
@@ -199,25 +227,19 @@ def _processar_lote_sincrono(alertas: list[Alerta]) -> None:
         registro["acao"] = "teste"
     else:
         try:
-            if MENSAGEIRO == "evolution":
-                from clients.whatsapp import EvolutionClient
-                destino = os.getenv("EVOLUTION_GROUP_JID", "")
-                if not destino:
-                    raise RuntimeError("EVOLUTION_GROUP_JID ausente no .env")
-                EvolutionClient().enviar_texto(destino, resultado.mensagem)
-            else:
-                from clients.telegram import TelegramClient
-                destino = os.getenv("TELEGRAM_CHAT_ID", "")
-                if not destino:
-                    raise RuntimeError("TELEGRAM_CHAT_ID ausente no .env")
-                TelegramClient().enviar_texto(destino, resultado.mensagem)
-                
+            enviar_mensagem(resultado.mensagem, MENSAGEIRO)
             registro["acao"] = f"enviado_{MENSAGEIRO}"
             log.info("Mensagem enviada via %s ao grupo (%s, %d caracteres)", MENSAGEIRO, resultado.origem, len(resultado.mensagem))
         except Exception as exc:  # noqa: BLE001
             registro["acao"] = "falha_envio"
             registro["erro_envio"] = type(exc).__name__
-            log.error("Falha ao enviar notificação (%s)", type(exc).__name__)
+            # As mensagens dos clientes do projeto nunca incluem token/URL; outras
+            # exceções podem incluir, então só o nome da classe é registrado.
+            detalhe = str(exc)[:200] if type(exc).__name__ in {"TelegramErro", "EvolutionErro"} else ""
+            if detalhe:
+                registro["erro_envio_detalhe"] = detalhe
+            log.error("Falha ao enviar notificação (%s)%s", type(exc).__name__,
+                      f": {detalhe}" if detalhe else "")
     _registrar_envio(registro)
 
 
@@ -303,8 +325,6 @@ async def receber_ravi(request: Request, token: str = "", x_webhook_token: str =
     payload = await _ler_payload_json(request)
 
     try:
-        from noc.ravi_event import (chave_evento_ravi, payload_para_alerta_ravi,
-                                    PayloadRaviIgnorado, PayloadRaviInvalido)
         alerta = payload_para_alerta_ravi(payload)
         agrupador = AGRUPADORES["RAVI"]
         novo = await agrupador.adicionar(alerta, chave=chave_evento_ravi(payload))

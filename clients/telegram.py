@@ -36,7 +36,14 @@ class TelegramClient:
             raise TelegramErro("MESSAGING_TIMEOUT_S deve estar entre 0 e 120 segundos.")
 
     def enviar_texto(self, destino: str, texto: str, tentativas: int = 3) -> dict[str, Any]:
-        """Envia texto; só repete 429, que confirma que a API recusou a tentativa."""
+        """Envia texto; repete 429 e falhas de conexão, nunca timeouts de leitura.
+
+        Falha de conexão (DNS, recusa, timeout ao conectar) quase sempre ocorre antes
+        de a requisição chegar ao Telegram; em casos raros de queda de socket após o
+        envio do request (ConnectionResetError), pode gerar duplicata — trade-off
+        intencional em alerta operacional onde perder o alerta é pior que duplicá-lo.
+        Timeout de leitura é ambíguo (a mensagem pode ter sido entregue) e não é repetido.
+        """
         if not isinstance(destino, str) or not destino.strip():
             raise TelegramErro("Destino vazio ou inválido.")
         if not isinstance(texto, str) or not texto.strip():
@@ -54,8 +61,16 @@ class TelegramClient:
         for tentativa in range(1, tentativas + 1):
             try:
                 resp = requests.post(url, json=payload, timeout=self.timeout)
+            except requests.ConnectionError as exc:
+                # Exceções HTTP podem incluir a URL completa, que contém o token do bot:
+                # só o nome da classe é propagado.
+                if tentativa >= tentativas:
+                    raise TelegramErro(
+                        f"{type(exc).__name__}; falha de conexão após {tentativas} tentativas."
+                    ) from None
+                time.sleep(2 * tentativa)
+                continue
             except requests.RequestException as exc:
-                # Exceções HTTP podem incluir a URL completa, que contém o token do bot.
                 raise TelegramErro(
                     f"{type(exc).__name__}; resultado do envio incerto, não foi repetido para evitar duplicata."
                 ) from None

@@ -29,7 +29,7 @@ sys.path.insert(0, str(RAIZ))
 load_dotenv(RAIZ / ".env")
 
 from clients.zabbix import ZabbixClient  # noqa: E402
-from noc.zabbix_event import payload_para_alerta, severidade_minima_ok  # noqa: E402
+from noc.zabbix_event import payload_para_alerta  # noqa: E402
 
 LOG = logging.getLogger("noc.zabbix_poller")
 SEVERIDADES = {

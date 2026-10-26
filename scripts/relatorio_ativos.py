@@ -1,10 +1,10 @@
 import sys
-import os
 import time
 import argparse
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from clients.mensageiro import enviar_mensagem
 from clients.zabbix import ZabbixClient
 from datetime import datetime, timezone, timedelta
 from noc.analyzer import MODELO_PADRAO, THINKING_NIVEIS, THINKING_PADRAO, analisar
@@ -139,32 +139,14 @@ def main():
     print("\n" + "=" * 50)
     
     if not args.enviar:
-        print("Relatório não enviado. Use --enviar para autorizar o envio desta execução.")
+        print("Relat?rio n?o enviado. Use --enviar para autorizar o envio desta execu??o.")
         return
-    # Envia somente quando o usuário opta explicitamente por esta execução.
-    mensageiro = os.getenv("NOC_MENSAGEIRO", "telegram").strip().lower()
 
     try:
-        if mensageiro == "evolution":
-            from clients.whatsapp import EvolutionClient
-            destino = os.getenv("EVOLUTION_GROUP_JID", "")
-            if destino:
-                EvolutionClient().enviar_texto(destino, resultado.mensagem)
-                print("Relatório enviado via Evolution API com sucesso!")
-            else:
-                print("AVISO: EVOLUTION_GROUP_JID não configurado. Relatório não enviado.")
-        elif mensageiro == "telegram":
-            from clients.telegram import TelegramClient
-            destino = os.getenv("TELEGRAM_CHAT_ID", "")
-            if destino:
-                TelegramClient().enviar_texto(destino, resultado.mensagem)
-                print("Relatório enviado via Telegram com sucesso!")
-            else:
-                print("AVISO: TELEGRAM_CHAT_ID não configurado. Relatório não enviado.")
-        else:
-            print(f"NOC_MENSAGEIRO inválido: {mensageiro!r}. Use telegram ou evolution.")
+        usado = enviar_mensagem(resultado.mensagem)
+        print(f"Relat?rio enviado via {usado} com sucesso!")
     except Exception as e:
-        print(f"Erro ao enviar relatório pelo {mensageiro}: {e}")
+        print(f"Erro ao enviar relat?rio: {e}")
 
 if __name__ == "__main__":
     main()

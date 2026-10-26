@@ -83,9 +83,9 @@ def main() -> int:
         print("O webhook não está em MODO_TESTE=true; simulação cancelada para evitar envio real.", file=sys.stderr)
         return 1
 
-    token = os.getenv("WEBHOOK_TOKEN", "")
+    token = os.getenv("ZABBIX_WEBHOOK_TOKEN") or os.getenv("WEBHOOK_TOKEN", "")
     if not token:
-        print("WEBHOOK_TOKEN ausente no .env", file=sys.stderr)
+        print("ZABBIX_WEBHOOK_TOKEN ausente no .env", file=sys.stderr)
         return 1
     for ev in cenario():
         r = requests.post(args.url, json=ev, headers={"X-Webhook-Token": token}, timeout=10)

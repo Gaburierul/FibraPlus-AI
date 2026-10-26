@@ -8,10 +8,12 @@
 *.env.*
 !.env.example
 
-# Python
+# Python e caches de testes/lint
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
+.ruff_cache/
 
 # IDEs
 .vscode/

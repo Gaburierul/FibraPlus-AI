@@ -36,6 +36,8 @@ _FABRICANTES = {
     "HUAWEI", "DATACOM", "ZTE", "RAISECOM", "MIKROTIK", "JUNIPER", "CISCO",
     "NOKIA", "FIBERHOME", "PARKS", "INTELBRAS", "UBIQUITI", "TPLINK", "VSOL", "CDATA",
 }
+_FUNCOES_CONHECIDAS = {"ROTAS", "BACKBONE", "BORDA", "CGNAT", "CORE", "BGP", "DISTRIBUICAO"}
+_TIPOS_GENERICOS = {"SWITCH", "SW", "OLT", "ROUTER", "ROTEADOR", "SERVER", "SERVIDOR"}
 
 _CATEGORIAS: list[tuple[str, re.Pattern]] = [
     ("CLIENTE", re.compile(r"^cliente\b")),
@@ -66,16 +68,47 @@ def decompor_hostname(host: str) -> tuple[str, str, Optional[str]]:
 
     Ex.: 'CPE-EXEMPLO-HUAWEI-VS02-RR01' -> ('CPE-EXEMPLO', 'VS02-RR01', 'HUAWEI')
          'EXEMPLO-POP-DATACOM-PE01'     -> ('EXEMPLO-POP', 'PE01', 'DATACOM')
+         'SWITCH 6730 (ITAPORA - ITP)'   -> ('ITAPORA-ITP', 'SWITCH-6730', None)
     """
-    partes = [p for p in re.split(r"[-_\s]+", host.strip().upper()) if p]
+    limpo = re.sub(r"[*~`'\"_]+", " ", host).strip()
+
+    m = re.search(r"\(([^)]+)\)", limpo)
+    if m:
+        conteudo_paren = m.group(1).strip()
+        fora = re.sub(r"\([^)]+\)", " ", limpo).strip()
+        partes_paren = [p for p in re.split(r"[-_\s]+", conteudo_paren.upper()) if p]
+        partes_fora = [p for p in re.split(r"[-_\s]+", fora.upper()) if p]
+        fabricante = next((p for p in partes_fora + partes_paren if p in _FABRICANTES), None)
+
+        eh_funcao_no_paren = (
+            conteudo_paren.upper() in _FUNCOES_CONHECIDAS
+            or (partes_paren and partes_paren[0] in _FUNCOES_CONHECIDAS)
+        )
+        eh_site_no_paren = not eh_funcao_no_paren and (
+            (partes_fora and partes_fora[0] in _TIPOS_GENERICOS)
+            or "-" in conteudo_paren
+            or any("POP" in p for p in partes_paren)
+        )
+        if eh_site_no_paren:
+            site = "-".join(partes_paren) or (partes_paren[0] if partes_paren else "?")
+            funcao = "-".join(partes_fora) or "?"
+            return site, funcao, fabricante
+
+        site = "-".join(partes_fora) or limpo.upper()
+        funcao = "-".join(partes_paren) or "?"
+        return site, funcao, fabricante
+
+    partes = [p.strip("()") for p in re.split(r"[-_\s]+", limpo.upper()) if p.strip("()")]
     for i, parte in enumerate(partes):
         if parte in _FABRICANTES:
             site = "-".join(partes[:i]) or partes[0]
             funcao = "-".join(partes[i + 1:]) or "?"
             return site, funcao, parte
+    if len(partes) >= 2 and partes[0] in _TIPOS_GENERICOS:
+        return "-".join(partes[1:]), partes[0], None
     if len(partes) >= 2:
         return "-".join(partes[:-1]), partes[-1], None
-    return host.strip().upper(), "?", None
+    return limpo.upper(), "?", None
 
 
 def peso_topologico(tags: dict[str, str]) -> Optional[tuple[int, str]]:
@@ -239,11 +272,38 @@ def _consolidar(alertas: list[Alerta]) -> list[Ocorrencia]:
     for grupo in por_chave.values():
         problemas = [a for a in grupo if a.status == PROBLEMA]
         resolucoes = [a for a in grupo if a.status == RESOLVIDO]
-        inicios_resolvidos = {r.inicio for r in resolucoes if r.inicio}
-        inicios_todos = {a.inicio for a in grupo if a.inicio} or {None}
-        pendentes = [p for p in problemas if p.inicio not in inicios_resolvidos]
+        inicios_todos = {a.inicio for a in grupo if a.inicio}
 
-        vezes = len(inicios_todos)
+        # 1) Casamento exato pelo timestamp de início do problema (padrão Zabbix).
+        inicios_resolvidos = {r.inicio for r in resolucoes if r.inicio}
+        # 2) Resoluções genéricas (ex.: Ravi com apenas timestamp de fim ou sem início)
+        #    são consumidas 1-para-1 em ordem cronológica para não fechar múltiplos problemas.
+        res_genericas = sorted(
+            resolucoes,
+            key=lambda r: (r.fim or r.inicio) is None,
+        )
+        usadas: set[int] = set()
+        pendentes = []
+        for p in problemas:
+            if p.inicio and p.inicio in inicios_resolvidos:
+                continue
+            resolvido = False
+            for idx, r in enumerate(res_genericas):
+                if idx in usadas:
+                    continue
+                t_r = r.fim or r.inicio
+                if p.inicio and t_r and t_r >= p.inicio:
+                    usadas.add(idx)
+                    resolvido = True
+                    break
+                if not p.inicio and t_r is not None:
+                    usadas.add(idx)
+                    resolvido = True
+                    break
+            if not resolvido:
+                pendentes.append(p)
+
+        vezes = max(len(inicios_todos), len(problemas), 1)
         if vezes >= 2:
             estado = "OSCILANDO" if pendentes else "RESOLVIDO"
             if not pendentes and vezes >= 3:
@@ -251,7 +311,7 @@ def _consolidar(alertas: list[Alerta]) -> list[Ocorrencia]:
         else:
             estado = "ATIVO" if pendentes else "RESOLVIDO"
 
-        base = max(grupo, key=lambda a: a.severidade)
+        base = max(grupo, key=lambda a: (a.severidade, a.status == PROBLEMA))
         site, funcao, fabricante = decompor_hostname(base.equipamento)
         tags: dict[str, str] = {}
         avisos: list[str] = []
@@ -275,7 +335,7 @@ def _consolidar(alertas: list[Alerta]) -> list[Ocorrencia]:
             estado=estado,
             vezes=vezes if datas_validas else len(grupo),
             ultima_resolucao=max(fins) if fins else None,
-            duracoes=[r.duracao for r in resolucoes if r.duracao],
+            duracoes=[a.duracao for a in grupo if a.duracao],
             tags=tags,
             avisos=avisos,
             ultimo_evento=max(datas_validas + fins) if (datas_validas or fins) else None,
@@ -320,7 +380,7 @@ def correlacionar(alertas: list[Alerta], janela_min: int = 10,
 
     incidentes = _agrupar_por_tempo(ocorrencias, janela_min)
     incidentes.sort(key=lambda i: (ORDEM_CLASSIFICACAO[i.classificacao],
-                                   -(i.inicio.timestamp() if i.inicio else 0)))
+                                   i.inicio or datetime.max))
     for n, inc in enumerate(incidentes, 1):
         inc.id = n
     return Correlacao(incidentes=incidentes,

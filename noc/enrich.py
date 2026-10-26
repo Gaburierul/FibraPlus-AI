@@ -10,7 +10,6 @@ Para cada equipamento citado nos alertas, consulta o Zabbix e traz:
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from noc.correlator import Correlacao, Ocorrencia
 from noc.parser import normalizar

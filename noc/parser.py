@@ -86,8 +86,9 @@ class Alerta:
 
     @property
     def chave(self) -> tuple[str, str]:
-        """Identidade lógica do alerta: (equipamento, problema)."""
-        return (self.equipamento.strip().lower(), normalizar(self.problema))
+        """Identidade lógica do alerta: (equipamento, item_chave ou problema)."""
+        identificador = self.tags.get("item_chave") or self.problema
+        return (self.equipamento.strip().lower(), normalizar(identificador))
 
 
 @dataclass
