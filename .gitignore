@@ -21,6 +21,7 @@ __pycache__/
 
 # Logs e dados operacionais locais
 logs/
+scratch/
 resumo_dia_07.json
 samples/alertas/09_ativos_zabbix.txt
 docs/relatorios/

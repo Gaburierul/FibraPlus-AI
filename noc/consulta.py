@@ -17,7 +17,8 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
+from collections.abc import Iterable
 
 from noc.parser import PROBLEMA, RESOLVIDO, Alerta, normalizar
 

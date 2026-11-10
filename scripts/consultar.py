@@ -1,5 +1,5 @@
 """
-Consulta geral do Zabbix — um único comando para qualquer recorte.
+Consulta geral do NOC (Zabbix + IXC Provedor) — um único comando para qualquer recorte.
 
 Substitui scripts avulsos por equipamento, cliente, cidade ou data. Os termos
 são buscados (sem acento, sem diferenciar maiúsculas) no nome do host, no nome
@@ -7,11 +7,12 @@ técnico, no nome do problema e nas tags. Vários termos = todos precisam casar.
 
 Exemplos:
     python scripts/consultar.py                                  # problemas ativos agora
-    python scripts/consultar.py EXEMPLO-PE01                   # ativos de um equipamento
+    python scripts/consultar.py EXEMPLO-PE01                     # ativos de um equipamento
     python scripts/consultar.py ospf --horas 12                  # histórico por assunto
     python scripts/consultar.py prefeitura --desde "2026-10-20 18:00" --ate "2026-10-21 08:00"
     python scripts/consultar.py --plantao noturno --data 2026-10-23 --md
-    python scripts/consultar.py --escopo clientes --horas 2      # só quedas de clientes/ONU
+    python scripts/consultar.py --escopo clientes --horas 2 --ixc  # cruza clientes caídos com o IXC
+    python scripts/consultar.py --so-ixc joaosilva               # diagnóstico direto no IXC (login/MAC/serial/#ID)
     python scripts/consultar.py BGP --excluir IPv6 --sev-min 4
     python scripts/consultar.py --horas 1 --analisar --enviar    # resumo correlacionado ao grupo
 """
@@ -87,6 +88,31 @@ def _slug(texto: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", texto.lower()).strip("_")[:60] or "consulta"
 
 
+def _executar_so_ixc(args) -> int:
+    from clients.ixc import formatar_diagnostico_ixc
+    from noc.enrich import cruzar_com_ixc
+
+    t0 = time.time()
+    diagnosticos, avisos = cruzar_com_ixc(args.termos, limite=args.ixc_limite)
+    print("🔎 DIAGNÓSTICO IXC PROVEDOR (Somente Leitura)")
+    print("=" * 60)
+    for d in diagnosticos:
+        print(formatar_diagnostico_ixc(d))
+        print("-" * 60)
+    for av in avisos:
+        print(f"⚠️ {av}")
+    print(f"({len(diagnosticos)} consulta(s) IXC em {time.time() - t0:.1f}s)")
+
+    if args.json is not None:
+        nome_base = _slug("ixc_" + "_".join(args.termos))
+        destino = Path(args.json) if args.json else RAIZ / "logs" / f"{nome_base}.json"
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"diagnosticos_ixc": [d.to_dict() for d in diagnosticos], "avisos": avisos}
+        destino.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"JSON salvo em {destino}")
+    return 0 if diagnosticos else 1
+
+
 def main() -> int:
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -94,7 +120,7 @@ def main() -> int:
         except (AttributeError, OSError):
             pass
 
-    p = argparse.ArgumentParser(description="Consulta geral de problemas e eventos do Zabbix.",
+    p = argparse.ArgumentParser(description="Consulta geral de problemas e eventos do NOC (Zabbix + IXC).",
                                 formatter_class=argparse.RawDescriptionHelpFormatter,
                                 epilog=__doc__.split("Exemplos:", 1)[1])
     p.add_argument("termos", nargs="*", help="equipamento, cliente, cidade, interface, tag... (todos devem casar)")
@@ -112,6 +138,14 @@ def main() -> int:
     janela.add_argument("--plantao", choices=sorted(PLANTOES), help="noturno 18:00→07:59 ou diurno 08:00→17:59")
     janela.add_argument("--data", type=_data_hora, help="data do plantão (dia em que termina; padrão hoje)")
 
+    ixc_grp = p.add_argument_group("cruzamento IXC Provedor (somente leitura)")
+    ixc_grp.add_argument("--ixc", action="store_true",
+                         help="cruza os clientes/termos encontrados com o IXC (Radius, ONU, contrato e O.S.)")
+    ixc_grp.add_argument("--so-ixc", action="store_true",
+                         help="consulta diretamente o IXC pelos termos informados (sem consultar o Zabbix)")
+    ixc_grp.add_argument("--ixc-limite", type=int, default=5,
+                         help="máximo de logins/clientes consultados no IXC por execução (padrão 5)")
+
     saida = p.add_argument_group("saída")
     saida.add_argument("--max-linhas", type=int, default=30, help="linhas por seção no terminal")
     saida.add_argument("--md", nargs="?", const="", metavar="ARQUIVO",
@@ -125,6 +159,8 @@ def main() -> int:
     ia.add_argument("--enviar", action="store_true", help="envia o resultado ao mensageiro configurado")
     args = p.parse_args()
 
+    if args.so_ixc and not args.termos:
+        p.error("--so-ixc exige pelo menos um termo (login PPPoE, MAC, serial ou #id_cliente)")
     if args.usar_ia and not args.analisar:
         p.error("--usar-ia exige --analisar")
     if (args.horas or 0) < 0 or (args.minutos or 0) < 0:
@@ -135,6 +171,9 @@ def main() -> int:
         p.error("--ate exige --desde")
     if sum(bool(x) for x in (args.plantao, args.desde, args.horas or args.minutos)) > 1:
         p.error("use apenas uma forma de janela: --horas/--minutos, --desde/--ate ou --plantao")
+
+    if args.so_ixc:
+        return _executar_so_ixc(args)
 
     from clients.zabbix import ZabbixClient
     try:
@@ -163,6 +202,26 @@ def main() -> int:
     print(f"\n({len(eventos)} evento(s) lidos do Zabbix, {len(selecionados)} selecionado(s), "
           f"{time.time() - t0:.1f}s)")
 
+    diagnosticos_ixc = []
+    if args.ixc:
+        from clients.ixc import formatar_diagnostico_ixc
+        from noc.enrich import cruzar_com_ixc
+
+        candidatos_ixc = [g.problema for g in resumo.ativos if g.eh_cliente]
+        if not candidatos_ixc:
+            candidatos_ixc = [g.problema for g in resumo.grupos if g.eh_cliente]
+        if not candidatos_ixc and args.termos:
+            candidatos_ixc = list(args.termos)
+
+        diagnosticos_ixc, avisos_ixc = cruzar_com_ixc(candidatos_ixc, limite=args.ixc_limite)
+        print(f"\n🔎 CRUZAMENTO IXC PROVEDOR ({len(diagnosticos_ixc)} consultado(s))")
+        if not diagnosticos_ixc and not avisos_ixc:
+            print("  Nenhum login de cliente identificado para consultar no IXC.")
+        for d in diagnosticos_ixc:
+            print(formatar_diagnostico_ixc(d))
+        for av in avisos_ixc:
+            print(f"  ⚠️ {av}")
+
     nome_base = _slug(f"{resumo.titulo}_{resumo.fim:%Y%m%d_%H%M}")
     if args.md is not None:
         destino = Path(args.md) if args.md else RAIZ / "docs" / "relatorios" / f"{nome_base}.md"
@@ -172,7 +231,10 @@ def main() -> int:
     if args.json is not None:
         destino = Path(args.json) if args.json else RAIZ / "logs" / f"{nome_base}.json"
         destino.parent.mkdir(parents=True, exist_ok=True)
-        destino.write_text(json.dumps(para_dict(resumo), ensure_ascii=False, indent=2), encoding="utf-8")
+        dados_json = para_dict(resumo)
+        if diagnosticos_ixc:
+            dados_json["diagnosticos_ixc"] = [d.to_dict() for d in diagnosticos_ixc]
+        destino.write_text(json.dumps(dados_json, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"JSON salvo em {destino}")
 
     mensagem = formatar_texto(resumo, max_linhas=15)

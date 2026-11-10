@@ -19,7 +19,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Hashable
+from collections.abc import Awaitable, Callable, Hashable
 
 from noc.parser import Alerta
 

@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from urllib.parse import urlsplit
 import requests
-from typing import Optional, List, Dict, Any
+from typing import Optional, Any
 from dotenv import load_dotenv
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -37,7 +37,7 @@ class ZabbixClient:
             "Authorization": f"Bearer {self.token}"
         }
 
-    def _call(self, method: str, params: Dict[str, Any]) -> Any:
+    def _call(self, method: str, params: dict[str, Any]) -> Any:
         """
         Realiza a chamada interna para a API JSON-RPC do Zabbix.
         
@@ -73,7 +73,7 @@ class ZabbixClient:
             
         return data.get("result")
 
-    def get_hosts(self, search: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_hosts(self, search: Optional[str] = None, limit: int = 50) -> list[dict[str, Any]]:
         """
         Obtém uma lista de hosts.
         
@@ -81,7 +81,7 @@ class ZabbixClient:
         :param limit: Limite máximo de hosts retornados (padrão 50).
         :return: Lista de hosts.
         """
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "output": ["hostid", "host", "name", "status"],
             "limit": limit
         }
@@ -90,7 +90,7 @@ class ZabbixClient:
             
         return self._call("host.get", params)
 
-    def get_problems(self, limit: int = 20, severity_min: int = 0, time_from: int = None) -> List[Dict[str, Any]]:
+    def get_problems(self, limit: int = 20, severity_min: int = 0, time_from: int = None) -> list[dict[str, Any]]:
         """
         Obtém problemas ativos.
         
@@ -118,7 +118,7 @@ class ZabbixClient:
             params["time_from"] = time_from
         return self._call("problem.get", params)
 
-    def get_host_details(self, hostname: str) -> Optional[Dict[str, Any]]:
+    def get_host_details(self, hostname: str) -> Optional[dict[str, Any]]:
         """
         Obtém os detalhes de um host específico.
         
@@ -135,7 +135,7 @@ class ZabbixClient:
         results = self._call("host.get", params)
         return results[0] if results else None
 
-    def get_triggers(self, hostids: Optional[List[str]] = None, only_problems: bool = True) -> List[Dict[str, Any]]:
+    def get_triggers(self, hostids: Optional[list[str]] = None, only_problems: bool = True) -> list[dict[str, Any]]:
         """
         Obtém os triggers configurados.
         
@@ -143,7 +143,7 @@ class ZabbixClient:
         :param only_problems: Se verdadeiro, filtra apenas os triggers em estado de problema (value=1).
         :return: Lista de triggers.
         """
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "output": ["triggerid", "description", "priority", "value", "lastchange"],
             "sortfield": ["lastchange"],
             "sortorder": "DESC",
@@ -158,7 +158,7 @@ class ZabbixClient:
             
         return self._call("trigger.get", params)
 
-    def get_events(self, limit: int = 30) -> List[Dict[str, Any]]:
+    def get_events(self, limit: int = 30) -> list[dict[str, Any]]:
         """
         Obtém os eventos recentes.
         
@@ -177,7 +177,7 @@ class ZabbixClient:
         return self._call("event.get", params)
 
     def get_trigger_events(self, limit: int = 500, eventid_from: int = None,
-                           time_from: int = None) -> List[Dict[str, Any]]:
+                           time_from: int = None) -> list[dict[str, Any]]:
         """Busca transições de trigger em ordem crescente, incluindo problemas e resoluções.
 
         Use exatamente um cursor: ``eventid_from`` para polling incremental ou
@@ -193,7 +193,7 @@ class ZabbixClient:
         if eventid_from is not None and time_from is not None:
             raise ValueError("Informe eventid_from ou time_from, não ambos.")
 
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "output": ["eventid", "source", "object", "objectid", "clock", "value",
                        "name", "severity", "r_eventid"],
             "source": 0,

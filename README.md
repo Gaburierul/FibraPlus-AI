@@ -26,6 +26,10 @@ Este é o cérebro automatizado do NOC da FibraPlus. O sistema lê alertas caót
    ZABBIX_TOKEN=seu_token_aqui
    RAVICOR_URL=https://ravi.example.com/api/api.php
    RAVICOR_TOKEN=seu_token_aqui
+   IXC_BASE_URL=https://ixc.example.com.br/webservice/v1
+   IXC_USER_ID=seu_id_usuario_api
+   IXC_API_HASH=seu_token_hash_aqui
+   IXC_TIMEOUT_S=8
    GEMINI_API_KEY=sua_chave_gemini_aqui
    NOC_AI_MODEL=gemini-3.5-flash-lite
    NOC_AI_THINKING=minimal
@@ -101,8 +105,12 @@ Para realizar qualquer busca (equipamento, cliente, cidade, protocolo, plantão 
 # Correlacionar janela e enviar ao grupo (sem IA por padrão; adicione --usar-ia se desejar):
 .\.venv\Scripts\python.exe scripts\consultar.py --horas 1 --analisar --enviar
 
-# Diagnóstico consolidado do NOC (webhook, logs, Zabbix e Ravi):
-.\.venv\Scripts\python.exe scripts\verificar_noc.py --zabbix
+# Diagnóstico direto de cliente/login/MAC/serial no IXC Provedor (somente leitura):
+.\.venv\Scripts\python.exe scripts\consultar.py --so-ixc login_do_cliente
+.\.venv\Scripts\python.exe scripts\consultar.py --escopo clientes --horas 2 --ixc
+
+# Diagnóstico consolidado do NOC (webhook, logs, Zabbix e IXC):
+.\.venv\Scripts\python.exe scripts\verificar_noc.py --zabbix --ixc
 
 # Monitor contínuo de infraestrutura (ignora quedas isoladas de ONU de cliente):
 .\.venv\Scripts\python.exe scripts\monitor_infra_continuo.py

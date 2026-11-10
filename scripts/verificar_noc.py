@@ -161,10 +161,24 @@ def _problemas_zabbix(limite: int = 60) -> list[dict]:
         return [{"erro": f"Falha ao consultar Zabbix: {exc}"}]
 
 
+def _verificar_ixc() -> tuple[bool, str]:
+    """Testa conectividade e permissão de leitura da API do IXC Provedor."""
+    try:
+        from clients.ixc import IXCClient
+        t0 = time.time()
+        with IXCClient() as ixc:
+            ixc.listar("radusuarios", "id", "1", oper="=", rp=1)
+        latencia = round((time.time() - t0) * 1000)
+        return True, f"API IXC Provedor operacional em modo somente leitura ({latencia}ms)"
+    except Exception as exc:
+        return False, f"IXC indisponível/não configurado: {exc}"
+
+
 def main():
     parser = argparse.ArgumentParser(description="Verificação operacional consolidada do NOC FibraPlus.")
     parser.add_argument("--envios", type=int, default=8, help="Número de envios recentes a inspecionar.")
     parser.add_argument("--zabbix", action="store_true", help="Consulta problemas ativos na API do Zabbix.")
+    parser.add_argument("--ixc", action="store_true", help="Testa autenticação e leitura na API do IXC Provedor.")
     parser.add_argument("--ia-teste", action="store_true", help="Força teste ao vivo na API do Gemini.")
     args = parser.parse_args()
 
@@ -259,6 +273,13 @@ def main():
                     print(f"  • [{sev_nome.get(p['severidade'], 'Average')}] {p['host']} — {p['problema']}")
                 if len(clientes) > 10:
                     print(f"  ... e mais {len(clientes) - 10} clientes com ONU down.")
+
+    # 5. IXC Provedor (se solicitado)
+    if args.ixc:
+        print("\n[5] CONECTIVIDADE IXC PROVEDOR (Webservice v1 - Somente Leitura)")
+        ok_ixc, msg_ixc = _verificar_ixc()
+        icone_ixc = "🟢" if ok_ixc else "🔴"
+        print(f"  {icone_ixc} {msg_ixc}")
 
     print("\n" + "=" * 70)
 

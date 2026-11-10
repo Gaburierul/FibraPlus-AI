@@ -1,18 +1,27 @@
 """
-Enriquecimento opcional das ocorrências com dados ao vivo do Zabbix.
+Enriquecimento opcional das ocorrências com dados ao vivo do Zabbix e do IXC Provedor.
 
 Para cada equipamento citado nos alertas, consulta o Zabbix e traz:
 * As TAGS do problema (backbone/edge = 1/2/3), que não vêm na mensagem do WhatsApp.
 * Se o problema ainda está ATIVO no Zabbix neste momento.
 
-É totalmente tolerante a falhas: se o Zabbix estiver fora, a análise segue sem enriquecimento.
+Para logins/circuitos de clientes, ``cruzar_com_ixc`` consulta o IXC Provedor em modo
+somente leitura (Radius, ONU/sinal, contrato/bloqueio e O.S. abertas).
+
+É totalmente tolerante a falhas: se o Zabbix ou o IXC estiverem fora, a análise
+segue sem travar nem derrubar o fluxo principal.
 """
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
+from collections.abc import Iterable
 
 from noc.correlator import Correlacao, Ocorrencia
 from noc.parser import normalizar
+
+if TYPE_CHECKING:
+    from clients.ixc import DiagnosticoIXC, IXCClient
 
 _MACRO_RE = re.compile(r"\{[A-Z#$][A-Z0-9_.#:]*\}")
 
@@ -117,3 +126,58 @@ def _tags_da_trigger(zabbix_client, hostid: str, padrao: re.Pattern,
             for tag in t.get("tags", []):
                 o.tags.setdefault(tag["tag"].lower(), tag["value"])
             return
+
+
+def cruzar_com_ixc(
+    termos: Iterable[str],
+    ixc_client: IXCClient | None = None,
+    limite: int = 5,
+) -> tuple[list[DiagnosticoIXC], list[str]]:
+    """Cruza uma lista de logins/MACs/seriais/alertas no IXC com tolerância total a falhas.
+
+    Retorna ``(diagnosticos, avisos)``. Nunca propaga exceção caso o IXC esteja
+    indisponível ou não configurado.
+    """
+    avisos: list[str] = []
+    diagnosticos: list[DiagnosticoIXC] = []
+    try:
+        from clients.ixc import extrair_termo_busca
+    except Exception as exc:  # noqa: BLE001
+        return [], [f"Enriquecimento IXC indisponível: {exc}"]
+
+    unicos: list[str] = []
+    vistos: set[str] = set()
+    for t in termos:
+        chave = extrair_termo_busca(t)
+        if chave and chave.lower() not in vistos:
+            vistos.add(chave.lower())
+            unicos.append(chave)
+
+    if not unicos:
+        return diagnosticos, avisos
+
+    criado_aqui = ixc_client is None
+    try:
+        if ixc_client is None:
+            from clients.ixc import IXCClient as _IXCClient
+            ixc_client = _IXCClient()
+    except Exception as exc:  # noqa: BLE001
+        return [], [f"Enriquecimento IXC indisponível: {exc}"]
+
+    limite_efetivo = max(1, min(limite, 20))
+    try:
+        for termo in unicos[:limite_efetivo]:
+            try:
+                diagnosticos.append(ixc_client.diagnosticar(termo))
+            except Exception as exc:  # noqa: BLE001
+                avisos.append(f"Falha ao consultar '{termo}' no IXC: {exc}")
+    finally:
+        if criado_aqui:
+            ixc_client.close()
+
+    if len(unicos) > limite_efetivo:
+        avisos.append(
+            f"Cruzamento IXC limitado aos primeiros {limite_efetivo} de {len(unicos)} itens "
+            "para preservar performance (máx. 20)."
+        )
+    return diagnosticos, avisos
