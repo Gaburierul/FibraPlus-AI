@@ -49,6 +49,7 @@ from clients.mensageiro import enviar_mensagem  # noqa: E402
 from noc.analyzer import ResultadoAnalise, analisar, mensagem_fallback  # noqa: E402  (precisa do .env carregado)
 from noc.correlator import correlacionar  # noqa: E402
 from noc.debounce import AgrupadorAlertas  # noqa: E402
+from noc.enrich import enriquecer_lote_com_ixc  # noqa: E402
 from noc.parser import Alerta  # noqa: E402
 from noc.ravi_event import (chave_evento_ravi, payload_para_alerta_ravi,  # noqa: E402
                             PayloadRaviIgnorado, PayloadRaviInvalido)
@@ -136,6 +137,8 @@ IA_NO_TESTE = _bool_env("NOC_AI_IN_TEST_MODE", False)
 MENSAGEIRO = os.getenv("NOC_MENSAGEIRO", "telegram").strip().lower()
 SILENCIO_S = _float_env("DEBOUNCE_SILENCIO_S", 45, 1, 3600)
 ESPERA_MAX_S = _float_env("DEBOUNCE_MAX_S", 180, 1, 3600)
+IXC_ENRIQUECER_WEBHOOK = _bool_env("IXC_ENRIQUECER_WEBHOOK", True)
+IXC_WEBHOOK_LIMITE = _int_env("IXC_WEBHOOK_LIMITE", 5, 1, 20)
 _sev = os.getenv("NOC_SEVERIDADE_MINIMA", "").strip()
 if _sev and (not _sev.isdigit() or not 0 <= int(_sev) <= 5):
     raise RuntimeError("NOC_SEVERIDADE_MINIMA deve ser um inteiro de 0 a 5.")
@@ -193,6 +196,16 @@ def _processar_lote_sincrono(alertas: list[Alerta]) -> None:
         registro["acao"] = "ignorado_sem_infra"
         _registrar_envio(registro)
         return
+
+    if correlacao is not None and IXC_ENRIQUECER_WEBHOOK and correlacao.alertas_clientes:
+        try:
+            logs_ixc = enriquecer_lote_com_ixc(correlacao, limite=IXC_WEBHOOK_LIMITE)
+            for msg_ixc in logs_ixc:
+                log.info("Enriquecimento IXC: %s", msg_ixc)
+            if correlacao.resumo_ixc:
+                registro["resumo_ixc"] = correlacao.resumo_ixc
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Enriquecimento IXC ignorado por erro (%s)", type(exc).__name__)
 
     usar_ia_no_lote = USAR_IA and ((MODO_TESTE and IA_NO_TESTE) or (not MODO_TESTE and IA_AUTO_ENVIO))
     if correlacao is not None:

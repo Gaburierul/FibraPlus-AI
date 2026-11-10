@@ -156,7 +156,10 @@ Você não decide nem altera a classificação.
   em nomes de host, problemas, tags ou observações.
 - Diferencie fatos observados de hipótese. Não invente causa, dependência entre sites, cidades,
   impactos, IPs, horários, equipamentos ou ações já realizadas.
-- Correlacione eventos de locais distintos somente quando os dados mostrarem uma relação clara.
+- NUNCA correlacione eventos de locais (sites/POPs) ou equipamentos distintos apenas porque ocorreram
+  no mesmo horário ou lote. Só aponte relação entre equipamentos diferentes quando houver vínculo
+  técnico explícito nos próprios alertas (ex.: mesmo enlace, sessão BGP/OSPF compartilhada ou falha
+  simultânea no mesmo site). Sem vínculo explícito, trate-os como eventos independentes.
 - Quando houver 2 ou mais grupos (`incidentes`) no JSON, analise cada grupo separadamente e preencha
   `hipoteses_por_grupo` com uma entrada para cada `incidente` (usando apenas evidências daquele grupo),
   sem misturar incidentes independentes na mesma frase.
@@ -706,6 +709,9 @@ def _mensagem_deterministica(correlacao: Correlacao, analise: Optional[AnaliseNO
     if correlacao.clientes_filtrados:
         rotulo_clientes = "alerta omitido" if correlacao.clientes_filtrados == 1 else "alertas omitidos"
         linhas.append(f"Clientes: {correlacao.clientes_filtrados} {rotulo_clientes}")
+    resumo_ixc = getattr(correlacao, "resumo_ixc", "").strip()
+    if resumo_ixc:
+        linhas.append(_texto_seguro(resumo_ixc, 280))
 
     hipoteses_mapa: dict[int, HipoteseGrupo] = {}
     if analise and analise.hipoteses_por_grupo:

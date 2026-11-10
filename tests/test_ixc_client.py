@@ -206,3 +206,138 @@ def test_contrato_antigo_cancelado_nao_mascara_falha_tecnica():
     diag.logins[0]["id_contrato"] = "100"
     status, _ = _classificar_diagnostico(diag)
     assert status == "BLOQUEIO_ADMINISTRATIVO"
+
+
+def test_formatar_resumo_ixc_lote_gramatica_singular_e_plural():
+    from clients.ixc import DiagnosticoIXC
+    from noc.enrich import formatar_resumo_ixc_lote
+
+    # Caso 1: 1 único cliente verificado (tudo no singular e sem abreviações)
+    d_unico = [
+        DiagnosticoIXC(
+            termo_buscado="cliente1",
+            encontrado=True,
+            status_operacional="FALHA_TECNICA_OFFLINE",
+            fibra_onus=[{"causa_ultima_queda": "LOS"}],
+        )
+    ]
+    resumo_1 = formatar_resumo_ixc_lote(d_unico, total_relacionados=1)
+    assert resumo_1 == (
+        "🔎 Diagnóstico IXC (1 cliente verificado): "
+        "1 cliente com falha técnica (última queda: LOS)."
+    )
+
+    # Caso 2: Amostra de 5 de 14 clientes (plural correto em todas as categorias)
+    d_amostra = [
+        DiagnosticoIXC(
+            termo_buscado="c1",
+            encontrado=True,
+            status_operacional="FALHA_TECNICA_OFFLINE",
+            fibra_onus=[{"causa_ultima_queda": "LOS"}],
+        ),
+        DiagnosticoIXC(
+            termo_buscado="c2",
+            encontrado=True,
+            status_operacional="FALHA_TECNICA_OFFLINE",
+            fibra_onus=[{"causa_ultima_queda": "DyingGasp"}],
+        ),
+        DiagnosticoIXC(
+            termo_buscado="c3",
+            encontrado=True,
+            status_operacional="OS_EM_ANDAMENTO",
+        ),
+        DiagnosticoIXC(
+            termo_buscado="c4",
+            encontrado=True,
+            status_operacional="OS_EM_ANDAMENTO",
+        ),
+        DiagnosticoIXC(
+            termo_buscado="c5",
+            encontrado=True,
+            status_operacional="BLOQUEIO_ADMINISTRATIVO",
+        ),
+    ]
+    resumo_2 = formatar_resumo_ixc_lote(d_amostra, total_relacionados=14)
+    assert resumo_2 == (
+        "🔎 Diagnóstico IXC (amostra de 5 de 14 clientes): "
+        "2 clientes com falha técnica (últimas quedas: LOS, DyingGasp) · "
+        "2 clientes com Ordens de Serviço em andamento · "
+        "1 cliente com bloqueio administrativo."
+    )
+
+
+def test_enriquecer_lote_ignora_clientes_de_outro_site_e_exibe_no_telegram():
+    from datetime import datetime
+    from clients.ixc import DiagnosticoIXC
+    from noc.analyzer import _mensagem_deterministica, _montar_entrada
+    from noc.correlator import correlacionar
+    from noc.enrich import enriquecer_lote_com_ixc, limpar_cache_ixc
+    from noc.parser import PROBLEMA, Alerta
+
+    limpar_cache_ixc()
+    t0 = datetime(2026, 11, 10, 15, 0, 0)
+    alertas = [
+        # Incidente de infraestrutura em AUA-IDC
+        Alerta(
+            status=PROBLEMA,
+            equipamento="AUA-IDC-ZTE-OLT01",
+            problema="Interface gpon-olt_1/8/13: Link down",
+            nivel="High",
+            severidade=4,
+            inicio=t0,
+            origem="ZABBIX",
+        ),
+        # Cliente do MESMO site/OLT (deve ser consultado no IXC)
+        Alerta(
+            status=PROBLEMA,
+            equipamento="AUA-IDC-ZTE-OLT01",
+            problema="Cliente: cliente_aua01 -> Esta down : -80",
+            nivel="Average",
+            severidade=3,
+            inicio=t0,
+            origem="ZABBIX",
+        ),
+        # Cliente de OUTRA cidade/POP no mesmo lote (NÃO deve ser correlacionado!)
+        Alerta(
+            status=PROBLEMA,
+            equipamento="DOU-POP-ZTE-OLT02",
+            problema="Cliente: cliente_dourados99 -> Esta down : -80",
+            nivel="Average",
+            severidade=3,
+            inicio=t0,
+            origem="ZABBIX",
+        ),
+    ]
+
+    correlacao = correlacionar(alertas)
+    assert correlacao.clientes_filtrados == 2
+
+    ixc_mock = MagicMock()
+    ixc_mock.diagnosticar.return_value = DiagnosticoIXC(
+        termo_buscado="cliente_aua01",
+        encontrado=True,
+        status_operacional="FALHA_TECNICA_OFFLINE",
+        fibra_onus=[{"causa_ultima_queda": "LOS"}],
+    )
+
+    logs = enriquecer_lote_com_ixc(correlacao, ixc_client=ixc_mock, limite=5)
+    # Garante que apenas o cliente do mesmo POP/OLT foi consultado
+    ixc_mock.diagnosticar.assert_called_once_with("cliente_aua01")
+    assert any("outro site/equipamento" in l for l in logs)
+
+    # Verifica que o prompt da IA não recebe dados de clientes (evita correlação aleatória)
+    entrada_ia, _, _ = _montar_entrada(correlacao)
+    assert "cliente_aua01" not in entrada_ia
+    assert "cliente_dourados99" not in entrada_ia
+
+    # Verifica que a mensagem final do Telegram inclui o resumo gramatical do IXC
+    msg = _mensagem_deterministica(correlacao)
+    assert "Clientes: 2 alertas omitidos" in msg
+    assert (
+        "🔎 Diagnóstico IXC (1 cliente verificado): "
+        "1 cliente com falha técnica (última queda: LOS)."
+    ) in msg
+
+    # Segunda chamada com o mesmo login usa o cache em memória sem nova requisição HTTP
+    enriquecer_lote_com_ixc(correlacao, ixc_client=ixc_mock, limite=5)
+    assert ixc_mock.diagnosticar.call_count == 1

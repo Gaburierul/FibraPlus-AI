@@ -254,6 +254,8 @@ class Correlacao:
     incidentes: list[Incidente]
     clientes_filtrados: int
     observacoes: list[str]
+    alertas_clientes: list[Alerta] = field(default_factory=list)
+    resumo_ixc: str = ""
 
     @property
     def ocorrencias(self) -> list[Ocorrencia]:
@@ -385,4 +387,5 @@ def correlacionar(alertas: list[Alerta], janela_min: int = 10,
         inc.id = n
     return Correlacao(incidentes=incidentes,
                       clientes_filtrados=0 if incluir_clientes else len(clientes),
-                      observacoes=observacoes)
+                      observacoes=observacoes,
+                      alertas_clientes=[] if incluir_clientes else clientes)

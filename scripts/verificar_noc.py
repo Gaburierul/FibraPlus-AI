@@ -236,7 +236,10 @@ def main():
             else:
                 status = f"ℹ️ {acao}"
 
-            print(f"  [{quando}] {origens:6} | {alertas:2} alertas | {status}")
+            sufixo_ixc = " | 🔎 IXC" if e.get("resumo_ixc") else ""
+            print(f"  [{quando}] {origens:6} | {alertas:2} alertas | {status}{sufixo_ixc}")
+            if e.get("resumo_ixc"):
+                print(f"      ↳ {e['resumo_ixc']}")
 
     # 3. Alertas Brutos Recentes Recebidos
     print("\n[3] ÚLTIMOS ALERTAS PROCESSADOS NO LOG")
