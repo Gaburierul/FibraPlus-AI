@@ -7,7 +7,8 @@ Este é o cérebro automatizado do NOC da FibraPlus. O sistema lê alertas caót
 - **Parser Resiliente:** Processa mensagens de texto brutas originadas de grupos de WhatsApp, limpando prefixos de cópia (ex: data/telefone) e extraindo metadados críticos.
 - **Correlação Lógica (Debounce):** Agrupa alertas que ocorrem dentro de uma mesma janela de tempo (ex: 10 minutos). Se uma fibra rompe e causa a queda de BGP, OSPF e PPPoE em cascata, tudo vira um único "Incidente".
 - **Sistema de Fallback:** Funciona perfeitamente mesmo se a IA estiver fora do ar. A lógica matemática do script agrupa os alertas, identifica oscilações (Flapping 🟠) e quedas (ATIVO 🔴), garantindo que a operação nunca pare.
-- **Integração Zabbix & Ravi:** Recebe eventos do Zabbix via JSON-RPC/poller e alertas enviados pelo webhook do Ravi.
+- **Integração Zabbix, IXC & Ravi:** Recebe eventos do Zabbix via JSON-RPC/poller, alertas do webhook do Ravi e realiza consultas somente leitura (LGPD) no IXC Provedor (`radusuarios`, `radacct`, `radpop_radio_cliente_fibra`, `cliente_contrato`, `su_oss_chamado`).
+- **Painel Web Local de Investigação (Porta 8090):** Interface corporativa local (com tema claro/escuro e histórico em SQLite) para investigar incidentes em linguagem natural usando **Gemini 4 Hydrogen** (padrão rápido) ou **Gemini 4 Neon** (raciocínio profundo) com ferramentas somente leitura e atalhos rápidos sem consumo de IA.
 - **Diagnóstico assistido por IA:** Usa a Interactions API do Gemini com saída estruturada para propor uma hipótese. A severidade e os fatos da mensagem são montados pelo código a partir dos alertas; a hipótese é marcada como não confirmada.
 
 ## ⚙️ Instalação
@@ -34,6 +35,9 @@ Este é o cérebro automatizado do NOC da FibraPlus. O sistema lê alertas caót
    NOC_AI_MODEL=gemini-3.5-flash-lite
    NOC_AI_THINKING=minimal
    NOC_AI_REDACT_DATA=true
+   NOC_CHAT_MODEL=gemini-4-hydrogen
+   NOC_CHAT_MODEL_DEEP=gemini-4-neon
+   NOC_PAINEL_PORT=8090
    GEMINI_TIMEOUT_S=45
    ZABBIX_TIMEOUT_S=15
    RAVICOR_TIMEOUT_S=15
@@ -87,6 +91,23 @@ Use `RAVI_WEBHOOK_TOKEN` e `ZABBIX_WEBHOOK_TOKEN` diferentes. O Ravi pode contin
 Para exibir horário nos alertas do Ravi, inclua no payload a data e hora do evento (`data`/`timestamp`, `event_date` + `event_time` ou a data no texto da mensagem). Para mostrar duração, envie `event_duration`/`duration` ou os horários de início e resolução. O sistema não estima duração quando esses dados não chegam.
 
 O relatório de ativos não envia mensagem por padrão e não chama Gemini implicitamente. `python scripts/relatorio_ativos.py --horas 1 --enviar` consulta o Zabbix, gera o resumo determinístico e envia a mensagem. Acrescente `--usar-ia` para autorizar uma chamada Gemini e acrescentar uma hipótese breve e não confirmada. `--offline` continua disponível como alias explícito. `NOC_AI_AUTO_SEND` controla apenas a hipótese de IA nos envios automáticos do webhook.
+
+## 🖥️ Painel Web Local de Investigação (Porta 8090)
+
+Para investigar incidentes interativamente no navegador (isolado da porta `8089` do webhook/Ngrok):
+
+```powershell
+# Opção 1: atalho que inicia o servidor local e abre o navegador
+.\iniciar_painel_noc.bat
+
+# Opção 2: comando direto
+.\.venv\Scripts\python.exe -m uvicorn server.painel:app --host 127.0.0.1 --port 8090
+```
+
+Acesse **`http://127.0.0.1:8090`**:
+- **Chat investigativo (SSE):** alterna entre **Hydrogen** (`gemini-4-hydrogen`, padrão rápido) e **Neon** (`gemini-4-neon`, investigações complexas) sobre um catálogo fechado de 12 ferramentas somente leitura (Zabbix eventos/métricas/séries/PON-OLT, IXC diagnóstico/`radacct`/fibra/O.S., Ravicor e logs do NOC), com histórico salvo em `logs/painel_chat.sqlite3`.
+- **Consultas rápidas (Sem IA):** atalhos de 1 clique para *Infra ativa*, *Saúde do NOC*, *Consulta IXC + radacct* e *Saúde PON/OLT*, sem gastar tokens da API Gemini.
+- **Segurança:** roda exclusivamente em `127.0.0.1:8090` (não exposto pelo túnel Ngrok da porta `8089`) e nunca expõe dados pessoais/financeiros do IXC.
 
 ## 🛠️ Scripts Operacionais, Consultas e Testes
 

@@ -31,13 +31,14 @@ load_dotenv(RAIZ / ".env")
 
 TABELAS_PERMITIDAS = frozenset({
     "radusuarios",
+    "radacct",
     "radpop_radio_cliente_fibra",
     "cliente_contrato",
     "cliente",
     "su_oss_chamado",
 })
 
-OPERADORES_PERMITIDOS = frozenset({"=", "!=", "like", ">", "<", ">=", "<=", "in"})
+OPERADORES_PERMITIDOS = frozenset({"=", "!=", "like", "L", ">", "<", ">=", "<=", "in"})
 
 # Campos permitidos por tabela (Allowlist estrita: tudo fora disso é descartado)
 _CAMPOS_PERMITIDOS: dict[str, frozenset[str]] = {
@@ -47,6 +48,12 @@ _CAMPOS_PERMITIDOS: dict[str, frozenset[str]] = {
         "ultima_conexao_inicial", "ultima_conexao_final",
         "motivo_desconexao", "sinal_ultimo_atendimento",
         "conexao", "porta_http",
+    }),
+    "radacct": frozenset({
+        "radacctid", "username", "nasipaddress", "nasportid",
+        "acctstarttime", "acctstoptime", "acctsessiontime",
+        "acctinputoctets", "acctoutputoctets", "acctterminatecause",
+        "framedipaddress", "callingstationid", "calledstationid",
     }),
     "radpop_radio_cliente_fibra": frozenset({
         "id", "id_login", "id_cliente", "id_contrato", "id_transmissor",
@@ -475,6 +482,90 @@ class IXCClient:
         if not registros and id_cliente and id_cliente != "0":
             registros = self.listar("su_oss_chamado", "id_cliente", id_cliente, oper="=", rp=rp)
         return [r for r in registros if r.get("status", "").upper() not in {"F", ""}]
+
+    def buscar_sessoes_radius(
+        self,
+        *,
+        username: str | None = None,
+        ip: str | None = None,
+        mac: str | None = None,
+        prefixo_ip: bool = False,
+        rp: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Consulta histórico de sessões Radius em ``radacct`` (somente leitura)."""
+        rp_safe = max(1, min(rp, 100))
+        if username and username.strip():
+            return self.listar(
+                "radacct",
+                "username",
+                username.strip(),
+                oper="=",
+                rp=rp_safe,
+                sortname="radacct.radacctid",
+                sortorder="desc",
+            )
+        if ip and ip.strip():
+            oper = "L" if prefixo_ip else "="
+            return self.listar(
+                "radacct",
+                "framedipaddress",
+                ip.strip(),
+                oper=oper,
+                rp=rp_safe,
+                sortname="radacct.radacctid",
+                sortorder="desc",
+            )
+        if mac and mac.strip():
+            return self.listar(
+                "radacct",
+                "callingstationid",
+                mac.strip(),
+                oper="=",
+                rp=rp_safe,
+                sortname="radacct.radacctid",
+                sortorder="desc",
+            )
+        return []
+
+    def buscar_fibra_por_pon_ou_local(
+        self,
+        *,
+        ponid: str | None = None,
+        bairro: str | None = None,
+        id_transmissor: str | None = None,
+        rp: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Consulta registros ópticos em ``radpop_radio_cliente_fibra`` por PON, bairro ou transmissor."""
+        rp_safe = max(1, min(rp, 100))
+        if ponid and ponid.strip():
+            return self.listar("radpop_radio_cliente_fibra", "ponid", ponid.strip(), oper="=", rp=rp_safe)
+        if bairro and bairro.strip():
+            return self.listar("radpop_radio_cliente_fibra", "bairro", bairro.strip(), oper="like", rp=rp_safe)
+        if id_transmissor and id_transmissor.strip():
+            return self.listar(
+                "radpop_radio_cliente_fibra", "id_transmissor", id_transmissor.strip(), oper="=", rp=rp_safe
+            )
+        return []
+
+    def buscar_chamados_recentes(
+        self,
+        *,
+        status: str | None = None,
+        termo_titulo: str | None = None,
+        rp: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Consulta Ordens de Serviço recentes em ``su_oss_chamado`` (sanitizadas LGPD)."""
+        rp_safe = max(1, min(rp, 50))
+        if termo_titulo and termo_titulo.strip():
+            registros = self.listar("su_oss_chamado", "titulo", termo_titulo.strip(), oper="like", rp=rp_safe)
+        elif status and status.strip():
+            registros = self.listar("su_oss_chamado", "status", status.strip().upper(), oper="=", rp=rp_safe)
+        else:
+            registros = self.listar("su_oss_chamado", "id", "0", oper=">", rp=rp_safe)
+        if status and status.strip() and termo_titulo:
+            alvo = status.strip().upper()
+            registros = [r for r in registros if r.get("status", "").upper() == alvo]
+        return registros
 
     def diagnosticar(self, termo: str) -> DiagnosticoIXC:
         """Executa o pipeline completo de correlação de um login/MAC/serial/ID no IXC."""

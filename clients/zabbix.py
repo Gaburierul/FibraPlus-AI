@@ -1,8 +1,13 @@
+from __future__ import annotations
+
 import os
+import re
+from collections import Counter, defaultdict
 from pathlib import Path
+from typing import Any, Optional
 from urllib.parse import urlsplit
+
 import requests
-from typing import Optional, Any
 from dotenv import load_dotenv
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -36,6 +41,20 @@ class ZabbixClient:
             "Content-Type": "application/json-rpc",
             "Authorization": f"Bearer {self.token}"
         }
+        self._session = requests.Session()
+
+    def close(self) -> None:
+        """Libera as conexões HTTP mantidas pela sessão."""
+        self._session.close()
+
+    def __enter__(self) -> ZabbixClient:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def __repr__(self) -> str:
+        return f"ZabbixClient(timeout={self.timeout:g})"
 
     def _call(self, method: str, params: dict[str, Any]) -> Any:
         """
@@ -52,7 +71,7 @@ class ZabbixClient:
             "id": 1
         }
         
-        response = requests.post(self.url, json=payload, headers=self.headers, timeout=self.timeout)
+        response = self._session.post(self.url, json=payload, headers=self.headers, timeout=self.timeout)
         response.raise_for_status()
         data = response.json()
         if not isinstance(data, dict):
@@ -73,24 +92,29 @@ class ZabbixClient:
             
         return data.get("result")
 
-    def get_hosts(self, search: Optional[str] = None, limit: int = 50) -> list[dict[str, Any]]:
+    def get_hosts(self, search: Optional[str] = None, limit: int = 50,
+                  with_interfaces: bool = False) -> list[dict[str, Any]]:
         """
         Obtém uma lista de hosts.
         
         :param search: Filtra os hosts pelo nome (opcional).
         :param limit: Limite máximo de hosts retornados (padrão 50).
+        :param with_interfaces: Inclui IPs das interfaces do host quando True.
         :return: Lista de hosts.
         """
         params: dict[str, Any] = {
             "output": ["hostid", "host", "name", "status"],
-            "limit": limit
+            "limit": max(1, min(limit, 500)),
         }
+        if with_interfaces:
+            params["selectInterfaces"] = ["ip", "dns", "port", "main", "type"]
         if search:
             params["search"] = {"name": search}
             
         return self._call("host.get", params)
 
-    def get_problems(self, limit: int = 20, severity_min: int = 0, time_from: int = None) -> list[dict[str, Any]]:
+    def get_problems(self, limit: int = 20, severity_min: int = 0,
+                     time_from: Optional[int] = None) -> list[dict[str, Any]]:
         """
         Obtém problemas ativos.
         
@@ -176,8 +200,8 @@ class ZabbixClient:
         
         return self._call("event.get", params)
 
-    def get_trigger_events(self, limit: int = 500, eventid_from: int = None,
-                           time_from: int = None) -> list[dict[str, Any]]:
+    def get_trigger_events(self, limit: int = 500, eventid_from: Optional[int] = None,
+                           time_from: Optional[int] = None) -> list[dict[str, Any]]:
         """Busca transições de trigger em ordem crescente, incluindo problemas e resoluções.
 
         Use exatamente um cursor: ``eventid_from`` para polling incremental ou
@@ -213,3 +237,227 @@ class ZabbixClient:
         if not isinstance(resultado, list) or any(not isinstance(item, dict) for item in resultado):
             raise ValueError("Resposta inválida de event.get: esperado uma lista de eventos.")
         return resultado
+
+    # ------------------------------------------------------------------
+    # Métodos de investigação aprofundada (somente leitura)
+    # ------------------------------------------------------------------
+
+    def resolve_host(self, nome_ou_id: str) -> Optional[dict[str, Any]]:
+        """Resolve um host por hostid numérico, nome exato ou busca parcial."""
+        termo = (nome_ou_id or "").strip()
+        if not termo:
+            return None
+        if termo.isdigit():
+            res = self._call("host.get", {
+                "hostids": [termo],
+                "output": ["hostid", "host", "name", "status"],
+                "selectInterfaces": ["ip", "dns", "port", "main", "type"],
+            })
+            if res:
+                return res[0]
+        for campo in ("name", "host"):
+            res = self._call("host.get", {
+                "filter": {campo: [termo]},
+                "output": ["hostid", "host", "name", "status"],
+                "selectInterfaces": ["ip", "dns", "port", "main", "type"],
+            })
+            if res:
+                return res[0]
+        res = self._call("host.get", {
+            "search": {"name": termo},
+            "output": ["hostid", "host", "name", "status"],
+            "selectInterfaces": ["ip", "dns", "port", "main", "type"],
+            "limit": 10,
+        })
+        return res[0] if res else None
+
+    def get_items(
+        self,
+        hostids: list[str] | str,
+        search_name: Optional[str] = None,
+        search_key: Optional[str] = None,
+        limit: int = 300,
+    ) -> list[dict[str, Any]]:
+        """Consulta itens (métricas) atuais de um ou mais hosts via ``item.get``."""
+        hids = [hostids] if isinstance(hostids, str) else list(hostids)
+        params: dict[str, Any] = {
+            "hostids": hids,
+            "output": ["itemid", "hostid", "name", "key_", "lastvalue", "lastclock", "units", "value_type"],
+            "limit": max(1, min(limit, 5000)),
+        }
+        search: dict[str, str] = {}
+        if search_name:
+            search["name"] = search_name
+        if search_key:
+            search["key_"] = search_key
+        if search:
+            params["search"] = search
+        return self._call("item.get", params)
+
+    def get_history(
+        self,
+        itemids: list[str] | str,
+        value_type: int,
+        time_from: int,
+        time_till: Optional[int] = None,
+        limit: int = 1000,
+        sortorder: str = "ASC",
+    ) -> list[dict[str, Any]]:
+        """Consulta série temporal de métricas via ``history.get``."""
+        iids = [itemids] if isinstance(itemids, str) else list(itemids)
+        params: dict[str, Any] = {
+            "itemids": iids,
+            "history": int(value_type),
+            "time_from": int(time_from),
+            "sortfield": "clock",
+            "sortorder": "DESC" if sortorder.upper() == "DESC" else "ASC",
+            "limit": max(1, min(limit, 5000)),
+        }
+        if time_till is not None:
+            params["time_till"] = int(time_till)
+        return self._call("history.get", params)
+
+    def get_trends(
+        self,
+        itemids: list[str] | str,
+        time_from: int,
+        time_till: Optional[int] = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Consulta tendências horárias agregadas via ``trend.get`` (janelas longas)."""
+        iids = [itemids] if isinstance(itemids, str) else list(itemids)
+        params: dict[str, Any] = {
+            "itemids": iids,
+            "time_from": int(time_from),
+            "output": ["itemid", "clock", "num", "value_min", "value_avg", "value_max"],
+            "limit": max(1, min(limit, 5000)),
+        }
+        if time_till is not None:
+            params["time_till"] = int(time_till)
+        return self._call("trend.get", params)
+
+    def get_active_triggers(
+        self,
+        hostids: Optional[list[str] | str] = None,
+        search: Optional[str] = None,
+        limit: int = 500,
+        with_items: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Retorna triggers ativas (value=1, status=0) com últimos valores dos itens."""
+        params: dict[str, Any] = {
+            "output": ["triggerid", "description", "priority", "value", "lastchange"],
+            "filter": {"value": 1, "status": 0},
+            "selectHosts": ["hostid", "host", "name"],
+            "sortfield": ["lastchange"],
+            "sortorder": "DESC",
+            "limit": max(1, min(limit, 5000)),
+        }
+        if with_items:
+            params["selectItems"] = ["itemid", "name", "key_", "lastvalue", "units"]
+        if hostids:
+            params["hostids"] = [hostids] if isinstance(hostids, str) else list(hostids)
+        if search:
+            params["search"] = {"description": search}
+        return self._call("trigger.get", params)
+
+    def get_pon_summary(self, host_nome_ou_id: str) -> dict[str, Any]:
+        """Consolida saúde PON a PON de uma OLT (ZTE/GPON e VSOL/EPON) e classifica quedas de ONUs."""
+        host = self.resolve_host(host_nome_ou_id)
+        if not host:
+            raise ValueError(f"Host OLT não encontrado no Zabbix: {host_nome_ou_id!r}")
+
+        hostid = host["hostid"]
+        host_name = host.get("name") or host.get("host") or hostid
+        items = self.get_items(hostid, limit=5000)
+
+        pons: dict[str, dict[str, int]] = defaultdict(dict)
+        max_clock = 0
+        for it in items:
+            nome = it.get("name", "")
+            m_zte = re.match(r"^PON\s+((?:gpon|epon)[^:]+):\s+ONUs\s+(\w+)", nome, re.I)
+            m_vsol = re.match(r"^((?:EPON|GPON)[^:]+):\s+ONUs\s+(\w+)", nome, re.I)
+            m = m_zte or m_vsol
+            if m:
+                pon_id = m.group(1).strip()
+                metrica = m.group(2).strip().upper()
+                try:
+                    pons[pon_id][metrica] = int(float(it.get("lastvalue") or 0))
+                except (TypeError, ValueError):
+                    pons[pon_id][metrica] = 0
+                try:
+                    max_clock = max(max_clock, int(it.get("lastclock") or 0))
+                except (TypeError, ValueError):
+                    pass
+
+        totais = {
+            "pons_monitoradas": len(pons),
+            "provisionadas": sum(d.get("PROVISIONADAS", 0) for d in pons.values()),
+            "online": sum(d.get("ONLINE", 0) for d in pons.values()),
+            "loss": sum(d.get("LOSS", 0) for d in pons.values()),
+            "dyinggasp": sum(d.get("DYINGGASP", 0) for d in pons.values()),
+            "offline": sum(d.get("OFFLINE", 0) for d in pons.values()),
+        }
+
+        pons_afetadas = []
+        for pon_id, d in pons.items():
+            loss = d.get("LOSS", 0)
+            dg = d.get("DYINGGASP", 0)
+            off = d.get("OFFLINE", 0)
+            on = d.get("ONLINE", 0)
+            prov = d.get("PROVISIONADAS", 0)
+            if loss > 0 or dg > 0 or off > 0 or (prov > 0 and on < prov):
+                pct = round(100.0 * max(0, prov - on) / prov, 1) if prov else 0.0
+                pons_afetadas.append({
+                    "pon": pon_id,
+                    "provisionadas": prov,
+                    "online": on,
+                    "loss": loss,
+                    "dyinggasp": dg,
+                    "offline": off,
+                    "percentual_queda": pct,
+                })
+        pons_afetadas.sort(key=lambda x: (-x["loss"], -x["dyinggasp"], -x["offline"], x["pon"]))
+
+        triggers = self.get_active_triggers(hostids=[hostid], limit=2000, with_items=True)
+        motivos_clientes: Counter[str] = Counter()
+        triggers_infra: list[dict[str, Any]] = []
+        clientes_recentes: list[dict[str, Any]] = []
+        for t in triggers:
+            desc = t.get("description", "")
+            eh_cli = bool(re.match(r"^cliente\s*:", desc, re.I) or "sinal acima" in desc.lower())
+            if not eh_cli:
+                triggers_infra.append({
+                    "descricao": desc,
+                    "prioridade": int(t.get("priority") or 0),
+                    "lastchange": int(t.get("lastchange") or 0),
+                })
+                continue
+            itens_t = t.get("items") or []
+            val = str(itens_t[0].get("lastvalue", "")) if itens_t else ""
+            if "sinal acima" in desc.lower():
+                motivo = "Sinal óptico alto"
+            elif val == "-80":
+                motivo = "LOS / Rompimento (-80)"
+            elif val == "-90":
+                motivo = "DyingGasp / Energia (-90)"
+            else:
+                motivo = f"Outro ({val or 'sem valor'})"
+            motivos_clientes[motivo] += 1
+            if len(clientes_recentes) < 25:
+                clientes_recentes.append({
+                    "descricao": desc,
+                    "motivo": motivo,
+                    "lastchange": int(t.get("lastchange") or 0),
+                })
+
+        return {
+            "host": host_name,
+            "hostid": hostid,
+            "ultimo_dado_clock": max_clock,
+            "totais": totais,
+            "pons_afetadas": pons_afetadas[:40],
+            "total_pons_afetadas": len(pons_afetadas),
+            "triggers_infra_ativas": triggers_infra[:30],
+            "clientes_ativos_por_motivo": dict(motivos_clientes),
+            "clientes_ativos_amostra_recente": clientes_recentes,
+        }

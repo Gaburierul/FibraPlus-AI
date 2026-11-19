@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0a1428" />
+  <title>FibraPlus NOC — Painel de Investigação</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script>
+    (function () {
+      var saved = localStorage.getItem("noc_theme");
+      if (saved === "dark" || saved === "light") {
+        document.documentElement.setAttribute("data-theme", saved);
+      } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    })();
+  </script>
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Barra Lateral -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+              <path d="M4 6h16l-9 12h9" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="19" cy="6" r="2.2" fill="#06bcf9" />
+            </svg>
+          </div>
+          <div class="brand-text">
+            <span class="brand-title">FibraPlus NOC</span>
+            <span class="brand-sub">Operação &amp; Diagnóstico</span>
+          </div>
+        </div>
+        <button class="btn-primary btn-new-chat" id="btn-nova-conversa" type="button">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M12 5v14M5 12h14" stroke-linecap="round" />
+          </svg>
+          <span>Nova verificação</span>
+        </button>
+      </div>
+
+      <!-- Consultas Rápidas sem IA -->
+      <section class="sidebar-section">
+        <div class="section-label">
+          <span>Consultas rápidas</span>
+          <span class="tag-zero-ia">Sem IA</span>
+        </div>
+        <div class="quick-grid">
+          <button class="quick-btn" data-quick="infra" type="button">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 12h-4l-3 9L9 3l-3 9H2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <span>Infra ativa</span>
+          </button>
+          <button class="quick-btn" data-quick="saude" type="button">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <span>Saúde NOC</span>
+          </button>
+          <button class="quick-btn" data-quick="ixc" type="button">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M21 21l-4.35-4.35" stroke-linecap="round" />
+            </svg>
+            <span>Consulta IXC</span>
+          </button>
+          <button class="quick-btn" data-quick="olt" type="button">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="4" width="20" height="6" rx="1.5" />
+              <rect x="2" y="14" width="20" height="6" rx="1.5" />
+              <circle cx="6" cy="7" r="1" fill="currentColor" />
+              <circle cx="6" cy="17" r="1" fill="currentColor" />
+            </svg>
+            <span>PON / OLT</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Histórico de Verificações -->
+      <section class="sidebar-section sidebar-history">
+        <div class="section-label">
+          <span>Histórico</span>
+          <span class="history-count" id="history-count">0</span>
+        </div>
+        <div class="search-box">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="7" />
+            <path d="M21 21l-4.35-4.35" stroke-linecap="round" />
+          </svg>
+          <input id="busca-conversas" type="search" placeholder="Filtrar investigações..." autocomplete="off" />
+        </div>
+        <ul class="conversation-list" id="lista-conversas"></ul>
+      </section>
+
+      <div class="sidebar-footer">
+        <div class="env-badge">
+          <span class="dot-local"></span>
+          <span>Localhost · Somente leitura</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Área Principal -->
+    <main class="workspace">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="icon-btn mobile-only" id="btn-menu-mobile" type="button" aria-label="Abrir menu">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 6h18M3 12h18M3 18h18" stroke-linecap="round" />
+            </svg>
+          </button>
+          <div class="topbar-title-wrap">
+            <h1 class="topbar-title" id="titulo-ativo">Nova verificação</h1>
+            <div class="status-pills" id="status-integracoes" aria-label="Status das integrações"></div>
+          </div>
+        </div>
+
+        <div class="topbar-right">
+          <div class="model-switch" role="group" aria-label="Seleção de modelo">
+            <button class="model-opt active" data-model="gemini-4-hydrogen" type="button" title="Rápido e equilibrado para verificações do dia a dia">
+              <span class="model-name">Hydrogen</span>
+              <span class="model-hint">Rápido</span>
+            </button>
+            <button class="model-opt" data-model="gemini-4-neon" type="button" title="Raciocínio profundo para correlações complexas">
+              <span class="model-name">Neon</span>
+              <span class="model-hint">Profundo</span>
+            </button>
+          </div>
+
+          <button class="icon-btn" id="btn-tema" type="button" title="Alternar tema claro / escuro" aria-label="Alternar tema">
+            <svg class="icon-sun" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke-linecap="round" />
+            </svg>
+            <svg class="icon-moon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- Painel Rápido Sem IA (Oculto por padrão) -->
+      <section class="quick-panel hidden" id="quick-panel" aria-live="polite">
+        <div class="quick-panel-head">
+          <div>
+            <h2 id="quick-panel-title">Consulta rápida</h2>
+            <p id="quick-panel-sub">Execução direta via API somente leitura, sem consumo de tokens.</p>
+          </div>
+          <div class="quick-panel-actions">
+            <button class="btn-secondary btn-sm" id="btn-quick-enviar-chat" type="button">Analisar no chat</button>
+            <button class="icon-btn" id="btn-fechar-quick" type="button" aria-label="Fechar painel rápido">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 6L6 18M6 6l12 12" stroke-linecap="round" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="quick-panel-controls" id="quick-panel-controls"></div>
+        <div class="quick-panel-body" id="quick-panel-body"></div>
+      </section>
+
+      <!-- Fluxo de Conversa -->
+      <section class="chat-feed" id="chat-feed">
+        <div class="empty-state" id="empty-state">
+          <div class="empty-header">
+            <span class="empty-kicker">CENTRAL DE VERIFICAÇÃO · ZABBIX · IXC · RAVICOR</span>
+            <h2>Investigação de Incidentes do NOC</h2>
+            <p>
+              Consulte eventos ativos, séries temporais de tráfego e sinal óptico, saúde PON de OLTs e
+              diagnósticos de clientes no IXC em linguagem natural.
+            </p>
+          </div>
+
+          <div class="starter-grid">
+            <button class="starter-card" type="button" data-prompt="Quais são os problemas de infraestrutura ativos agora no Zabbix? Destaque os críticos por POP.">
+              <span class="starter-tag">Zabbix · Tempo real</span>
+              <strong>Problemas ativos de infraestrutura</strong>
+              <span>Mapeia incidentes abertos em backbone, PEs, switches e OLTs.</span>
+            </button>
+            <button class="starter-card" type="button" data-prompt="Faça um levantamento dos eventos e oscilações (flapping) de infraestrutura das últimas 2 horas.">
+              <span class="starter-tag">Zabbix · Histórico</span>
+              <strong>Oscilações nas últimas 2 horas</strong>
+              <span>Identifica interfaces ou equipamentos com quedas repetidas.</span>
+            </button>
+            <button class="starter-card" type="button" data-prompt="Verifique a saúde geral do NOC: conectividade das APIs Zabbix e IXC e últimos lotes do webhook.">
+              <span class="starter-tag">NOC · Operação</span>
+              <strong>Saúde do NOC e últimos lotes</strong>
+              <span>Confere latência das integrações e histórico recente do webhook.</span>
+            </button>
+            <button class="starter-card" type="button" data-prompt="Quero diagnosticar um cliente no IXC (Radius, sinal óptico, contrato e histórico radacct). Pergunte-me o login, IP ou serial da ONU.">
+              <span class="starter-tag">IXC · Somente leitura</span>
+              <strong>Diagnóstico completo de cliente</strong>
+              <span>Cruza Radius, radacct, ONU/PON, contrato e Ordens de Serviço.</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="messages-container" id="messages-container"></div>
+      </section>
+
+      <!-- Barra de Entrada -->
+      <footer class="composer-wrap">
+        <form class="composer" id="form-chat">
+          <textarea
+            id="input-mensagem"
+            rows="1"
+            placeholder="Descreva o incidente, equipamento, cidade, login ou IP para investigar..."
+            autocomplete="off"
+          ></textarea>
+          <div class="composer-actions">
+            <span class="composer-meta" id="composer-meta">Modelo ativo: Hydrogen</span>
+            <div class="composer-buttons">
+              <button class="btn-secondary btn-sm hidden" id="btn-cancelar" type="button">Interromper</button>
+              <button class="btn-primary btn-send" id="btn-enviar" type="submit" aria-label="Enviar verificação">
+                <span>Enviar</span>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <path d="M5 12h14M13 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </form>
+      </footer>
+    </main>
+  </div>
+
+  <div class="sidebar-backdrop hidden" id="sidebar-backdrop"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
