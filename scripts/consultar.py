@@ -88,6 +88,10 @@ def _slug(texto: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", texto.lower()).strip("_")[:60] or "consulta"
 
 
+def _plural(n: int, singular: str, plural: str) -> str:
+    return f"{n} {singular if n == 1 else plural}"
+
+
 def _executar_so_ixc(args) -> int:
     from clients.ixc import formatar_diagnostico_ixc
     from noc.enrich import cruzar_com_ixc
@@ -101,7 +105,7 @@ def _executar_so_ixc(args) -> int:
         print("-" * 60)
     for av in avisos:
         print(f"⚠️ {av}")
-    print(f"({len(diagnosticos)} consulta(s) IXC em {time.time() - t0:.1f}s)")
+    print(f"({_plural(len(diagnosticos), 'consulta', 'consultas')} ao IXC em {time.time() - t0:.1f} s)")
 
     if args.json is not None:
         nome_base = _slug("ixc_" + "_".join(args.termos))
@@ -199,8 +203,9 @@ def main() -> int:
         avisos=avisos,
     )
     print(formatar_texto(resumo, args.max_linhas))
-    print(f"\n({len(eventos)} evento(s) lidos do Zabbix, {len(selecionados)} selecionado(s), "
-          f"{time.time() - t0:.1f}s)")
+    print(f"\n({_plural(len(eventos), 'evento lido', 'eventos lidos')} do Zabbix, "
+          f"{_plural(len(selecionados), 'selecionado', 'selecionados')}, "
+          f"{time.time() - t0:.1f} s)")
 
     diagnosticos_ixc = []
     if args.ixc:
@@ -214,7 +219,7 @@ def main() -> int:
             candidatos_ixc = list(args.termos)
 
         diagnosticos_ixc, avisos_ixc = cruzar_com_ixc(candidatos_ixc, limite=args.ixc_limite)
-        print(f"\n🔎 CRUZAMENTO IXC PROVEDOR ({len(diagnosticos_ixc)} consultado(s))")
+        print(f"\n🔎 CRUZAMENTO IXC PROVEDOR ({_plural(len(diagnosticos_ixc), 'cliente consultado', 'clientes consultados')})")
         if not diagnosticos_ixc and not avisos_ixc:
             print("  Nenhum login de cliente identificado para consultar no IXC.")
         for d in diagnosticos_ixc:
@@ -244,7 +249,7 @@ def main() -> int:
         correlacao = correlacionar(para_alertas(resumo.grupos), janela_min=10)
         if not correlacao.incidentes:
             mensagem = (f"✅ {resumo.titulo}: nenhum incidente de infraestrutura "
-                        f"({correlacao.clientes_filtrados} alerta(s) de clientes filtrados).")
+                        f"({_plural(correlacao.clientes_filtrados, 'alerta de cliente filtrado', 'alertas de clientes filtrados')}).")
         else:
             mensagem = analisar(correlacao, usar_ia=args.usar_ia).mensagem
         print("\n" + "=" * 60 + "\n" + mensagem + "\n" + "=" * 60)

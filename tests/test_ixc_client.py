@@ -323,7 +323,7 @@ def test_enriquecer_lote_ignora_clientes_de_outro_site_e_exibe_no_telegram():
     logs = enriquecer_lote_com_ixc(correlacao, ixc_client=ixc_mock, limite=5)
     # Garante que apenas o cliente do mesmo POP/OLT foi consultado
     ixc_mock.diagnosticar.assert_called_once_with("cliente_aua01")
-    assert any("outro site/equipamento" in l for l in logs)
+    assert any("outro site ou equipamento" in linha for linha in logs)
 
     # Verifica que o prompt da IA não recebe dados de clientes (evita correlação aleatória)
     entrada_ia, _, _ = _montar_entrada(correlacao)
@@ -341,3 +341,66 @@ def test_enriquecer_lote_ignora_clientes_de_outro_site_e_exibe_no_telegram():
     # Segunda chamada com o mesmo login usa o cache em memória sem nova requisição HTTP
     enriquecer_lote_com_ixc(correlacao, ixc_client=ixc_mock, limite=5)
     assert ixc_mock.diagnosticar.call_count == 1
+
+
+def _resp(registros=None, erro=None):
+    resp = MagicMock()
+    resp.ok = True
+    resp.status_code = 200
+    if erro:
+        resp.json.return_value = {"type": "error", "message": erro}
+    else:
+        resp.json.return_value = {"registros": registros or []}
+    return resp
+
+
+def test_disjuntor_evita_varios_timeouts_seguidos():
+    cliente = IXCClient(base_url="https://ixc.example.com.br", user_id="1", api_hash="h", timeout=2)
+    with patch("clients.ixc.requests.Session.post", side_effect=requests.Timeout("lento")) as post:
+        diagnosticos, avisos = cruzar_com_ixc(["a1", "a2", "a3"], ixc_client=cliente)
+    # Apenas uma requisição HTTP real: as demais são canceladas pelo disjuntor
+    assert post.call_count == 1
+    assert diagnosticos == []
+    assert any("canceladas" in av for av in avisos)
+
+
+def test_busca_parcial_ambigua_nao_mistura_clientes():
+    cliente = IXCClient(base_url="https://ixc.example.com.br", user_id="1", api_hash="h")
+
+    def falso_post(url, headers, data, timeout):
+        payload = json.loads(data)
+        if url.endswith("/radusuarios") and payload["oper"] == "like":
+            return _resp([
+                {"id": "1", "login": "joao01", "id_cliente": "10", "id_contrato": "100"},
+                {"id": "2", "login": "joao02", "id_cliente": "20", "id_contrato": "200"},
+            ])
+        return _resp([])
+
+    with patch("clients.ixc.requests.Session.post", side_effect=falso_post) as post:
+        diag = cliente.diagnosticar("joao")
+    assert diag.status_operacional == "BUSCA_AMBIGUA"
+    assert diag.contratos == []
+    assert "informe o login exato" in diag.resumo
+    # Nenhuma consulta de contrato/O.S. foi feita para clientes ambíguos
+    assert not any(c.args[0].endswith("/cliente_contrato") for c in post.call_args_list)
+
+
+def test_tabela_cliente_sem_permissao_e_consultada_uma_unica_vez():
+    cliente = IXCClient(base_url="https://ixc.example.com.br", user_id="1", api_hash="h")
+    chamadas_cliente = []
+
+    def falso_post(url, headers, data, timeout):
+        if url.endswith("/cliente"):
+            chamadas_cliente.append(url)
+            return _resp(erro="Você não tem permissão para acessar o recurso cliente")
+        if url.endswith("/radusuarios"):
+            return _resp([{"id": "9", "login": "x", "online": "S", "ativo": "S", "id_cliente": "77"}])
+        return _resp([])
+
+    with patch("clients.ixc.requests.Session.post", side_effect=falso_post):
+        d1 = cliente.diagnosticar("#77")
+        d2 = cliente.diagnosticar("x")
+    assert d1.encontrado and d2.encontrado
+    assert d1.avisos == [] and d2.avisos == []
+    assert len(chamadas_cliente) == 1
+    assert "situação do contrato não verificada" in d2.resumo

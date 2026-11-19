@@ -275,6 +275,8 @@ class IXCClient:
         }
         # Sessão HTTP reutilizada (keep-alive): reduz latência em lotes de consultas.
         self._session = requests.Session()
+        self._falha_conexao = ""
+        self._cliente_sem_permissao = False
 
     def close(self) -> None:
         """Libera as conexões HTTP mantidas pela sessão."""
@@ -327,6 +329,11 @@ class IXCClient:
         headers = dict(self._headers)
         headers["ixcsoft"] = "listar"  # garantia dupla de leitura
 
+        # Disjuntor: após um timeout ou falha de conexão, as próximas consultas desta
+        # instância falham na hora, para que um IXC lento não some vários timeouts seguidos.
+        if self._falha_conexao:
+            raise IXCErro(f"IXC indisponível nesta execução ({self._falha_conexao}); consulta ignorada.")
+
         try:
             resp = self._session.post(
                 url,
@@ -335,8 +342,10 @@ class IXCClient:
                 timeout=self.timeout,
             )
         except requests.Timeout:
+            self._falha_conexao = f"timeout de {self.timeout:g}s"
             raise IXCErro(f"Timeout ({self.timeout:g}s) ao consultar {tabela_limpa} no IXC.") from None
         except requests.RequestException as exc:
+            self._falha_conexao = type(exc).__name__
             raise IXCErro(f"Falha de conexão com o IXC ({type(exc).__name__}).") from None
 
         if resp.status_code in {401, 403}:
@@ -365,8 +374,8 @@ class IXCClient:
     # Consultas especializadas do NOC
     # ------------------------------------------------------------------
 
-    def buscar_logins(self, termo: str, rp: int = 10) -> list[dict[str, Any]]:
-        """Busca em ``radusuarios`` por login exato, IP, MAC ou ID de cliente."""
+    def buscar_logins(self, termo: str, rp: int = 10, permitir_parcial: bool = True) -> list[dict[str, Any]]:
+        """Busca em ``radusuarios`` por login exato, MAC ou IP; opcionalmente, por login parcial."""
         termo = termo.strip()
         if not termo:
             return []
@@ -374,7 +383,7 @@ class IXCClient:
         achados = self.listar("radusuarios", "login", termo, oper="=", rp=rp)
         if achados:
             return achados
-        # 2. Se parecer MAC (AA:BB:CC... ou AABB.CCDD...)
+        # 2. Se parecer MAC (AA:BB:CC:DD:EE:FF ou AA-BB-CC-DD-EE-FF)
         if re.fullmatch(r"[0-9A-Fa-f]{2}(?:[:\-][0-9A-Fa-f]{2}){5}", termo):
             achados = self.listar("radusuarios", "mac", termo, oper="=", rp=rp)
             if achados:
@@ -384,8 +393,10 @@ class IXCClient:
             achados = self.listar("radusuarios", "ip", termo, oper="=", rp=rp)
             if achados:
                 return achados
-        # 4. Busca parcial por login (like)
-        return self.listar("radusuarios", "login", termo, oper="like", rp=rp)
+        # 4. Busca parcial por login (like), somente quando solicitada
+        if permitir_parcial:
+            return self.listar("radusuarios", "login", termo, oper="like", rp=rp)
+        return []
 
     def buscar_fibra(
         self,
@@ -436,9 +447,18 @@ class IXCClient:
         return []
 
     def buscar_cliente(self, id_cliente: str) -> dict[str, Any] | None:
-        if not id_cliente or id_cliente == "0":
+        """Dados não sensíveis do cliente; retorna None se o grupo da API não tiver permissão."""
+        if not id_cliente or id_cliente == "0" or self._cliente_sem_permissao:
             return None
-        res = self.listar("cliente", "id", id_cliente, oper="=", rp=1)
+        try:
+            res = self.listar("cliente", "id", id_cliente, oper="=", rp=1)
+        except IXCErro as exc:
+            # A tabela 'cliente' é opcional (comum ficar bloqueada por LGPD): após a primeira
+            # recusa, não insiste nas próximas consultas desta instância.
+            if "permissão para acessar o recurso cliente" in str(exc).lower():
+                self._cliente_sem_permissao = True
+                return None
+            raise
         return res[0] if res else None
 
     def buscar_chamados_abertos(
@@ -469,31 +489,44 @@ class IXCClient:
         # 1. Se o usuário passou "#1234", busca direto pelo ID do cliente
         if termo_limpo.startswith("#") and termo_limpo[1:].isdigit():
             cid = termo_limpo[1:]
-            cli = self.buscar_cliente(cid)
-            if cli:
-                diag.clientes.append(cli)
+            try:
+                cli = self.buscar_cliente(cid)
+                if cli:
+                    diag.clientes.append(cli)
+            except IXCErro as exc:
+                diag.avisos.append(str(exc))
             diag.logins = self.listar("radusuarios", "id_cliente", cid, oper="=", rp=10)
         else:
-            diag.logins = self.buscar_logins(termo_limpo, rp=5)
+            # Ordem: login/MAC/IP exatos -> ONU (serial/MAC) -> login parcial.
+            diag.logins = self.buscar_logins(termo_limpo, rp=5, permitir_parcial=False)
             if not diag.logins:
-                # Tenta achar pela ONU (serial/MAC) em radpop_radio_cliente_fibra
                 fibra = self.buscar_fibra(serial_ou_mac=termo_limpo, rp=5)
                 if fibra:
                     diag.fibra_onus.extend(fibra)
                     id_login = fibra[0].get("id_login", "")
+                    login_onu = fibra[0].get("nome", "")
                     if id_login and id_login != "0":
                         diag.logins = self.listar("radusuarios", "id", id_login, oper="=", rp=5)
-
-        ids_clientes = {
-            r.get("id_cliente", "")
-            for r in (diag.logins + diag.fibra_onus)
-            if r.get("id_cliente") and r.get("id_cliente") != "0"
-        }
-        ids_contratos = {
-            r.get("id_contrato", "")
-            for r in (diag.logins + diag.fibra_onus)
-            if r.get("id_contrato") and r.get("id_contrato") != "0"
-        }
+                    elif login_onu:
+                        diag.logins = self.listar("radusuarios", "login", login_onu, oper="=", rp=5)
+            if not diag.logins and not diag.fibra_onus:
+                parciais = self.listar("radusuarios", "login", termo_limpo, oper="like", rp=5)
+                if len(parciais) == 1:
+                    diag.logins = parciais
+                    diag.avisos.append(
+                        f"Login localizado por busca parcial: '{parciais[0].get('login', '?')}'."
+                    )
+                elif len(parciais) > 1:
+                    # Ambíguo: nunca mistura contratos e Ordens de Serviço de clientes diferentes.
+                    diag.logins = parciais
+                    diag.encontrado = True
+                    diag.status_operacional = "BUSCA_AMBIGUA"
+                    nomes = ", ".join(p.get("login", "?") for p in parciais[:5])
+                    diag.resumo = (
+                        f"A busca parcial por '{termo_limpo}' retornou {len(parciais)} logins "
+                        f"({nomes}); informe o login exato."
+                    )
+                    return diag
 
         # 2. Busca fibra/ONU se ainda não buscou (tenta por id_login, login_nome e id_contrato)
         if not diag.fibra_onus:
@@ -511,6 +544,17 @@ class IXCClient:
                 except IXCErro as exc:
                     diag.avisos.append(str(exc))
 
+        ids_clientes = {
+            r.get("id_cliente", "")
+            for r in (diag.logins + diag.fibra_onus)
+            if r.get("id_cliente") and r.get("id_cliente") != "0"
+        }
+        ids_contratos = {
+            r.get("id_contrato", "")
+            for r in (diag.logins + diag.fibra_onus)
+            if r.get("id_contrato") and r.get("id_contrato") != "0"
+        }
+
         # 3. Busca contratos
         for ctid in sorted(ids_contratos)[:3]:
             try:
@@ -524,7 +568,7 @@ class IXCClient:
                 except IXCErro as exc:
                     diag.avisos.append(str(exc))
 
-        # 4. Busca dados básicos não-sensíveis do cliente (opcional) e O.S. abertas
+        # 4. Busca dados básicos não sensíveis do cliente (opcional) e Ordens de Serviço abertas
         for cid in sorted(ids_clientes)[:2]:
             if not any(c.get("id") == cid for c in diag.clientes):
                 try:
@@ -532,10 +576,7 @@ class IXCClient:
                     if cli:
                         diag.clientes.append(cli)
                 except IXCErro as exc:
-                    # Se o grupo de API não tiver permissão na tabela 'cliente' (comum por LGPD),
-                    # ignora silenciosamente pois contrato, login, fibra e O.S. já bastam.
-                    if "permissão para acessar o recurso cliente" not in str(exc).lower():
-                        diag.avisos.append(str(exc))
+                    diag.avisos.append(str(exc))
             try:
                 diag.chamados_abertos.extend(self.buscar_chamados_abertos(id_cliente=cid))
             except IXCErro as exc:
@@ -587,15 +628,21 @@ def _classificar_diagnostico(diag: DiagnosticoIXC) -> tuple[str, str]:
                 f"Login '{lg.get('login', '?')}' está marcado como INATIVO no Radius.",
             )
 
-    # 3. Verifica se há O.S. em aberto
+    # 3. Verifica se há Ordem de Serviço em aberto
     online = any(lg.get("online", "").upper() == "S" for lg in diag.logins)
     if diag.chamados_abertos and not online:
         ch = diag.chamados_abertos[0]
         st_ch = STATUS_CHAMADO.get(ch.get("status", "").upper(), ch.get("status", "Aberto"))
         return (
             "OS_EM_ANDAMENTO",
-            f"Cliente offline com O.S. #{ch.get('id', '?')} em andamento ({st_ch}: {ch.get('titulo', 'sem título')}).",
+            f"Cliente offline com a Ordem de Serviço #{ch.get('id', '?')} em andamento "
+            f"({st_ch}: {ch.get('titulo') or 'sem título'}).",
         )
+
+    # Só afirma "contrato liberado" quando o contrato foi realmente consultado.
+    texto_contrato = (
+        "contrato ativo e liberado" if candidatos else "situação do contrato não verificada"
+    )
 
     # 4. Verifica status de conexão técnica
     if diag.logins and not online:
@@ -605,20 +652,20 @@ def _classificar_diagnostico(diag: DiagnosticoIXC) -> tuple[str, str]:
             f = diag.fibra_onus[0]
             rx = f.get("sinal_rx") or "?"
             causa = f.get("causa_ultima_queda") or lg.get("motivo_desconexao") or "sem causa registrada"
-            onu_info = f" | RX IXC: {rx} dBm | Última queda: {causa}"
+            onu_info = f" | RX no IXC: {rx} dBm | Última queda: {causa}"
         return (
             "FALHA_TECNICA_OFFLINE",
-            f"Contrato ativo e liberado, mas login '{lg.get('login', '?')}' está OFFLINE{onu_info}.",
+            f"Login '{lg.get('login', '?')}' está OFFLINE no Radius ({texto_contrato}){onu_info}.",
         )
 
     if online:
-        lg = next(l for l in diag.logins if l.get("online", "").upper() == "S")
+        lg = next(item for item in diag.logins if item.get("online", "").upper() == "S")
         rx_str = ""
         if diag.fibra_onus and diag.fibra_onus[0].get("sinal_rx"):
             rx_str = f" | RX: {diag.fibra_onus[0]['sinal_rx']} dBm"
         return (
             "ONLINE_NORMAL",
-            f"Login '{lg.get('login', '?')}' ONLINE (IP {lg.get('ip', '?')}{rx_str}) e contrato liberado.",
+            f"Login '{lg.get('login', '?')}' ONLINE (IP {lg.get('ip') or '?'}{rx_str}); {texto_contrato}.",
         )
 
     return "CADASTRO_LOCALIZADO", f"Registro localizado para '{diag.termo_buscado}'."
@@ -632,6 +679,7 @@ def formatar_diagnostico_ixc(diag: DiagnosticoIXC) -> str:
         "FALHA_TECNICA_OFFLINE": "🔴",
         "ONLINE_NORMAL": "🟢",
         "CADASTRO_LOCALIZADO": "ℹ️",
+        "BUSCA_AMBIGUA": "❓",
         "NAO_ENCONTRADO": "⚪",
     }.get(diag.status_operacional, "ℹ️")
 
@@ -644,7 +692,7 @@ def formatar_diagnostico_ixc(diag: DiagnosticoIXC) -> str:
         linhas.append(
             f"   • Radius: login={lg.get('login', '?')} | {estado_rad} | "
             f"IP={lg.get('ip') or '-'} | MAC={lg.get('mac') or '-'} | "
-            f"últ. queda={lg.get('ultima_conexao_final') or '-'}"
+            f"última queda={lg.get('ultima_conexao_final') or '-'}"
         )
     for f in diag.fibra_onus[:3]:
         pon_str = f.get("ponid") or f"{f.get('slotno') or '?'}/{f.get('ponno') or '?'}"
@@ -670,7 +718,7 @@ def formatar_diagnostico_ixc(diag: DiagnosticoIXC) -> str:
     for ch in diag.chamados_abertos[:3]:
         st_ch = STATUS_CHAMADO.get(ch.get("status", "").upper(), ch.get("status", "?"))
         linhas.append(
-            f"   • O.S. Aberta #{ch.get('id', '?')} ({st_ch} desde {ch.get('data_abertura') or '?'}): "
+            f"   • Ordem de Serviço aberta #{ch.get('id', '?')} ({st_ch} desde {ch.get('data_abertura') or '?'}): "
             f"{ch.get('titulo') or 'sem descrição'}"
         )
     for av in diag.avisos:

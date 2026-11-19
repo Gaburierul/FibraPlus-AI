@@ -139,6 +139,10 @@ def limpar_cache_ixc() -> None:
         _CACHE_IXC.clear()
 
 
+def _plural(n: int, singular: str, plural: str) -> str:
+    return f"{n} {singular if n == 1 else plural}"
+
+
 def _diagnosticar_com_cache(
     ixc_client: IXCClient,
     termo: str,
@@ -154,7 +158,9 @@ def _diagnosticar_com_cache(
                 return item[1]
 
     diag = ixc_client.diagnosticar(termo)
-    if usar_cache and ttl_s > 0:
+    # Não guarda resultados parciais (com avisos de falha), para não fixar um diagnóstico
+    # incompleto por 10 minutos depois de uma instabilidade momentânea do IXC.
+    if usar_cache and ttl_s > 0 and not diag.avisos:
         with _CACHE_LOCK:
             if len(_CACHE_IXC) >= _MAX_ITENS_CACHE_IXC:
                 expirados = [k for k, (ts, _) in _CACHE_IXC.items() if (agora - ts) >= ttl_s]
@@ -213,8 +219,13 @@ def cruzar_com_ixc(
         for idx, termo in enumerate(unicos[:limite_efetivo]):
             if prazo_max_s is not None and idx > 0 and (time.monotonic() - inicio_lote) >= prazo_max_s:
                 avisos.append(
-                    f"Orçamento de tempo do IXC ({prazo_max_s:g}s) atingido após {idx} consulta(s)."
+                    f"Tempo máximo do IXC ({prazo_max_s:g} s) atingido; "
+                    f"{_plural(idx, 'consulta concluída', 'consultas concluídas')}."
                 )
+                break
+            falha_conexao = getattr(ixc_client, "_falha_conexao", "")
+            if isinstance(falha_conexao, str) and falha_conexao:
+                avisos.append("IXC sem resposta; as consultas restantes deste lote foram canceladas.")
                 break
             try:
                 diagnosticos.append(
@@ -231,7 +242,7 @@ def cruzar_com_ixc(
     if len(unicos) > limite_efetivo:
         avisos.append(
             f"Cruzamento IXC limitado aos primeiros {limite_efetivo} de {len(unicos)} itens "
-            "para preservar performance (máx. 20)."
+            "para preservar o desempenho (máximo de 20)."
         )
     return diagnosticos, avisos
 
@@ -306,6 +317,13 @@ def formatar_resumo_ixc_lote(
             else f"{n} clientes localizados no cadastro"
         )
 
+    if n := contagem.get("BUSCA_AMBIGUA", 0):
+        partes.append(
+            "1 login com mais de um cadastro correspondente"
+            if n == 1
+            else f"{n} logins com mais de um cadastro correspondente"
+        )
+
     if n := contagem.get("NAO_ENCONTRADO", 0):
         partes.append(
             "1 login não localizado no cadastro"
@@ -354,8 +372,10 @@ def enriquecer_lote_com_ixc(
     logins_relacionados: list[str] = []
     vistos: set[str] = set()
     ignorados_outro_site = 0
+    # Clientes que caíram e já voltaram dentro do mesmo lote não precisam de consulta.
+    chaves_resolvidas = {a.chave for a in correlacao.alertas_clientes if a.status != PROBLEMA}
     for alerta in correlacao.alertas_clientes:
-        if alerta.status != PROBLEMA:
+        if alerta.status != PROBLEMA or alerta.chave in chaves_resolvidas:
             continue
         eq_cliente = (alerta.equipamento or "").strip().lower()
         site_cliente, _, _ = decompor_hostname(alerta.equipamento or "")
@@ -378,7 +398,13 @@ def enriquecer_lote_com_ixc(
 
     if ignorados_outro_site:
         logs.append(
-            f"IXC: {ignorados_outro_site} alerta(s) de clientes ignorados por pertencerem a outro site/equipamento."
+            "IXC: "
+            + _plural(
+                ignorados_outro_site,
+                "alerta de cliente ignorado por pertencer a outro site ou equipamento",
+                "alertas de clientes ignorados por pertencerem a outros sites ou equipamentos",
+            )
+            + "."
         )
     if not logins_relacionados:
         return logs
@@ -397,6 +423,12 @@ def enriquecer_lote_com_ixc(
             diagnosticos, total_relacionados=len(logins_relacionados)
         )
         logs.append(
-            f"IXC: {len(diagnosticos)}/{len(logins_relacionados)} cliente(s) do mesmo POP/equipamento verificados."
+            f"IXC: {len(diagnosticos)} de "
+            + _plural(
+                len(logins_relacionados),
+                "cliente do mesmo site ou equipamento verificado",
+                "clientes do mesmo site ou equipamento verificados",
+            )
+            + "."
         )
     return logs
