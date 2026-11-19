@@ -19,6 +19,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 from noc.consulta import FUSO
+from noc.custos import calcular_custo_tokens
 from noc.ferramentas_noc import (
     ROTULOS_FERRAMENTAS,
     TOOLS_DECLARATIONS,
@@ -184,9 +185,12 @@ def _criar_cliente_genai():
     from google import genai
     from google.genai import types
 
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    api_key = (
+        os.getenv("GEMINI_CHAT_API_KEY", "").strip()
+        or os.getenv("GEMINI_API_KEY", "").strip()
+    )
     if not api_key:
-        raise ValueError("GEMINI_API_KEY não configurada no arquivo .env.")
+        raise ValueError("GEMINI_CHAT_API_KEY ou GEMINI_API_KEY não configurada no arquivo .env.")
     return genai.Client(
         api_key=api_key,
         http_options=types.HttpOptions(
@@ -370,6 +374,7 @@ def investigar_streaming(
                 "texto_completo": "".join(texto_final_acumulado),
                 "ferramentas_usadas": ferramentas_log,
                 "tokens": tokens_totais,
+                "custo_estimado": calcular_custo_tokens(model_id, tokens_totais),
             }
             return
 
@@ -458,4 +463,5 @@ def investigar_streaming(
         "texto_completo": "".join(texto_final_acumulado),
         "ferramentas_usadas": ferramentas_log,
         "tokens": tokens_totais,
+        "custo_estimado": calcular_custo_tokens(model_id, tokens_totais),
     }

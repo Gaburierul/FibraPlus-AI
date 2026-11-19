@@ -37,6 +37,7 @@ from noc.agente_investigacao import (  # noqa: E402
     resolver_modelo,
 )
 from noc.chat_store import ChatStore  # noqa: E402
+from noc.custos import calcular_custo_tokens, resumo_consumo  # noqa: E402
 from noc.ferramentas_noc import executar_ferramenta  # noqa: E402
 
 PASTA_ESTATICOS = Path(__file__).resolve().parent / "static" / "painel"
@@ -99,7 +100,7 @@ async def obter_config() -> dict[str, Any]:
             "zabbix": bool(os.getenv("ZABBIX_URL") and os.getenv("ZABBIX_TOKEN")),
             "ixc": bool(os.getenv("IXC_BASE_URL") and os.getenv("IXC_API_HASH")),
             "ravicor": bool(os.getenv("RAVICOR_URL") and os.getenv("RAVICOR_TOKEN")),
-            "gemini": bool(os.getenv("GEMINI_API_KEY")),
+            "gemini": bool(os.getenv("GEMINI_CHAT_API_KEY") or os.getenv("GEMINI_API_KEY")),
         },
     }
 
@@ -124,6 +125,9 @@ async def obter_conversa(conversa_id: str) -> dict[str, Any]:
     conv = store.obter_conversa(conversa_id)
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversa não encontrada.")
+    for msg in conv.get("mensagens") or []:
+        if msg.get("papel") == "assistant" and msg.get("tokens"):
+            msg["custo_estimado"] = calcular_custo_tokens(msg.get("modelo", ""), msg["tokens"])
     return conv
 
 
@@ -309,6 +313,11 @@ async def rapido_hosts(busca: str = Query(default="OLT", max_length=80)) -> JSON
         "zabbix_buscar_hosts",
         {"busca": busca, "limite": 40},
     )
+
+
+@app.get("/api/rapido/consumo")
+async def rapido_consumo() -> dict[str, Any]:
+    return await asyncio.to_thread(resumo_consumo, chat_db_path=store.caminho)
 
 
 if __name__ == "__main__":

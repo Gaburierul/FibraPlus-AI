@@ -267,3 +267,52 @@ def test_painel_fastapi_rotas_e_sse(tmp_path, monkeypatch):
     assert conv_final["titulo"] == "Como está o POP Norte agora"
     assert len(conv_final["mensagens"]) == 2
     assert conv_final["mensagens"][1]["conteudo"] == "Diagnóstico concluído."
+
+
+def test_custos_calculo_tokens_e_agregacao_webhook_e_chat(tmp_path):
+    from datetime import datetime
+    from noc.consulta import FUSO
+    from noc.custos import calcular_custo_tokens, resumo_consumo
+
+    # Hydrogen: 100k in (40k em cache) + 2k out + 1k thought
+    c = calcular_custo_tokens(
+        "gemini-4-hydrogen",
+        {
+            "total_input_tokens": 100_000,
+            "total_cached_tokens": 40_000,
+            "total_output_tokens": 2_000,
+            "total_thought_tokens": 1_000,
+        },
+        usd_brl=5.0,
+    )
+    # 60k * 1.50/1M = 0.09 | 40k * 0.075/1M = 0.003 | 3k * 7.50/1M = 0.0225 -> total 0.1155 USD -> R$ 0.5775
+    assert abs(c["usd"] - 0.1155) < 1e-6
+    assert abs(c["brl"] - 0.5775) < 1e-4
+
+    # Agrega envios.jsonl + SQLite do chat
+    envios = tmp_path / "envios.jsonl"
+    envios.write_text(
+        json.dumps({
+            "quando": "2026-11-19T09:00:00",
+            "origem": "ia",
+            "tokens": {"total_input_tokens": 2000, "total_output_tokens": 200, "total_tokens": 2200},
+        }) + "\n",
+        encoding="utf-8",
+    )
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv = store.criar_conversa("Teste", modelo="gemini-4-neon")
+    store.salvar_mensagem(
+        conv["id"],
+        "assistant",
+        "OK",
+        modelo="gemini-4-neon",
+        tokens={"total_input_tokens": 10_000, "total_output_tokens": 500, "total_tokens": 10_500},
+    )
+
+    ref = datetime(2026, 11, 19, 10, 0, 0, tzinfo=FUSO)
+    res = resumo_consumo(envios_path=envios, chat_db_path=store.caminho, usd_brl=5.85, agora=ref)
+    assert res["ok"] is True
+    assert res["hoje"]["chamadas_webhook"] == 1
+    assert res["ultimos_30d"]["chamadas_painel"] == 1
+    assert res["ultimos_30d"]["brl_painel"] > 0
+    assert len(res["por_modelo_30d"]) == 2

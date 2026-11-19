@@ -210,6 +210,18 @@ def main():
         else:
             print("  Nenhuma análise recente no histórico.")
         print("  (Dica: use --ia-teste para disparar um ping em tempo real à API)")
+    try:
+        from noc.custos import resumo_consumo
+        c = resumo_consumo()
+        print(
+            f"  💰 Consumo estimado (R$ {c['cotacao_usd_brl']:.2f}/US$): "
+            f"Hoje R$ {c['hoje']['brl']:.2f} | "
+            f"7 dias R$ {c['ultimos_7d']['brl']:.2f} | "
+            f"30 dias R$ {c['ultimos_30d']['brl']:.2f} "
+            f"(Webhook R$ {c['ultimos_30d']['brl_webhook']:.2f} · Painel R$ {c['ultimos_30d']['brl_painel']:.2f})"
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
     # 2. Últimos Envios do Webhook
     print(f"\n[2] ÚLTIMOS {args.envios} ENVIOS / AÇÕES DO WEBHOOK")

@@ -38,6 +38,8 @@
     quickPanelBody: document.getElementById("quick-panel-body"),
     btnFecharQuick: document.getElementById("btn-fechar-quick"),
     btnQuickEnviarChat: document.getElementById("btn-quick-enviar-chat"),
+    btnAbrirConsumo: document.getElementById("btn-abrir-consumo"),
+    sidebarCostVal: document.getElementById("sidebar-cost-val"),
   };
 
   /* ---------------------------------------------------------------------- */
@@ -58,6 +60,11 @@
     if (id.includes("neon")) return "Neon";
     if (id.includes("hydrogen")) return "Hydrogen";
     return id;
+  }
+
+  function fmtBrl(valor) {
+    const num = Number(valor || 0);
+    return "R$ " + num.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
   function fmtDataCurta(iso) {
@@ -354,11 +361,16 @@
       : "";
     const ferrHtml = msg.papel === "assistant" ? criarHtmlFerramentas(msg.ferramentas, false) : "";
     const tok = msg.tokens || {};
+    const custo = msg.custo_estimado || null;
+    const custoTxt = custo && typeof custo.brl === "number"
+      ? `<span>Custo est.: ${esc(fmtBrl(custo.brl))}</span>`
+      : "";
     const footerHtml =
       msg.papel === "assistant" && tok.total_tokens
         ? `<div class="msg-footer">
              <span>Modelo: ${esc(msg.modelo || state.modelo)}</span>
              <span>Tokens: ${esc(tok.total_tokens)} (entrada ${esc(tok.total_input_tokens || 0)} · saída ${esc(tok.total_output_tokens || 0)})</span>
+             ${custoTxt}
            </div>`
         : "";
 
@@ -544,9 +556,13 @@
               }
               if (ev.tokens && ev.tokens.total_tokens) {
                 footerEl.classList.remove("hidden");
+                const custoSpan = ev.custo_estimado && typeof ev.custo_estimado.brl === "number"
+                  ? `<span>Custo est.: ${esc(fmtBrl(ev.custo_estimado.brl))}</span>`
+                  : "";
                 footerEl.innerHTML = `
                   <span>Modelo: ${esc(ev.modelo || state.modelo)}</span>
-                  <span>Tokens: ${esc(ev.tokens.total_tokens)} (entrada ${esc(ev.tokens.total_input_tokens || 0)} · saída ${esc(ev.tokens.total_output_tokens || 0)})</span>`;
+                  <span>Tokens: ${esc(ev.tokens.total_tokens)} (entrada ${esc(ev.tokens.total_input_tokens || 0)} · saída ${esc(ev.tokens.total_output_tokens || 0)})</span>
+                  ${custoSpan}`;
               }
               copyBtn.classList.remove("hidden");
               copyBtn.onclick = () => {
@@ -575,6 +591,7 @@
       el.btnEnviar.disabled = false;
       el.btnCancelar.classList.add("hidden");
       await carregarConversas(el.buscaConversas.value);
+      carregarResumoConsumoBarra();
       scrollToBottom();
     }
   }
@@ -586,19 +603,26 @@
   function fecharQuickPanel() {
     el.quickPanel.classList.add("hidden");
     state.quickMode = null;
-    document.querySelectorAll(".quick-btn").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".quick-btn, .cost-pill-btn").forEach((b) => b.classList.remove("active"));
   }
 
   function abrirQuickPanel(modo) {
     state.quickMode = modo;
     state.quickPromptContext = "";
     el.quickPanel.classList.remove("hidden");
-    document.querySelectorAll(".quick-btn").forEach((b) => {
+    el.btnQuickEnviarChat.classList.toggle("hidden", modo === "consumo");
+    document.querySelectorAll(".quick-btn, .cost-pill-btn").forEach((b) => {
       b.classList.toggle("active", b.dataset.quick === modo);
     });
     fecharSidebarMobile();
 
-    if (modo === "infra") {
+    if (modo === "consumo") {
+      el.quickPanelTitle.textContent = "Consumo estimado de créditos Gemini (R$)";
+      el.quickPanelSub.textContent = "Cálculo em tempo real a partir dos tokens gravados em logs/envios.jsonl e no histórico local do painel.";
+      el.quickPanelControls.innerHTML = `<button class="btn-primary btn-sm" id="q-consumo-go" type="button">Atualizar</button>`;
+      document.getElementById("q-consumo-go").onclick = () => executarQuickConsumo();
+      executarQuickConsumo();
+    } else if (modo === "infra") {
       el.quickPanelTitle.textContent = "Problemas ativos de infraestrutura (Zabbix)";
       el.quickPanelSub.textContent = "Leitura direta em tempo real, sem consumo de IA.";
       el.quickPanelControls.innerHTML = `
@@ -881,6 +905,96 @@
     }
   }
 
+  async function carregarResumoConsumoBarra() {
+    if (!el.sidebarCostVal) return;
+    try {
+      const resp = await fetch("/api/rapido/consumo");
+      if (!resp.ok) return;
+      const c = await resp.json();
+      el.sidebarCostVal.textContent = `${fmtBrl(c.hoje?.brl)} hoje · ${fmtBrl(c.ultimos_30d?.brl)}/30d`;
+    } catch (_) {
+      el.sidebarCostVal.textContent = "Indisponível";
+    }
+  }
+
+  async function executarQuickConsumo() {
+    el.quickPanelBody.innerHTML = `<div class="live-status"><span class="spinner"></span>Calculando consumo estimado...</div>`;
+    try {
+      const resp = await fetch("/api/rapido/consumo");
+      const c = await resp.json();
+      if (!c.ok) throw new Error("Não foi possível calcular o consumo.");
+      if (el.sidebarCostVal) {
+        el.sidebarCostVal.textContent = `${fmtBrl(c.hoje?.brl)} hoje · ${fmtBrl(c.ultimos_30d?.brl)}/30d`;
+      }
+
+      const modelosRows = (c.por_modelo_30d || []).length
+        ? c.por_modelo_30d
+            .map(
+              (m) => `<tr>
+                <td class="mono">${esc(m.modelo)}</td>
+                <td class="mono">${esc(m.chamadas_30d)}</td>
+                <td class="mono">${Number(m.tokens_30d || 0).toLocaleString("pt-BR")}</td>
+                <td class="mono">US$ ${Number(m.usd_30d || 0).toFixed(4)}</td>
+                <td class="mono"><strong>${esc(fmtBrl(m.brl_30d))}</strong></td>
+              </tr>`
+            )
+            .join("")
+        : `<tr><td colspan="5">Nenhuma chamada com IA registrada nos últimos 30 dias.</td></tr>`;
+
+      const diarioRows = (c.diario_14d || []).length
+        ? c.diario_14d
+            .map(
+              (d) => `<tr>
+                <td class="mono">${esc(d.data)}</td>
+                <td class="mono">${esc(d.chamadas_webhook)}</td>
+                <td class="mono">${esc(d.chamadas_painel)}</td>
+                <td class="mono">${Number(d.tokens_total || 0).toLocaleString("pt-BR")}</td>
+                <td class="mono"><strong>${esc(fmtBrl(d.brl))}</strong></td>
+              </tr>`
+            )
+            .join("")
+        : `<tr><td colspan="5">Sem dados nos últimos 14 dias.</td></tr>`;
+
+      el.quickPanelBody.innerHTML = `
+        <div class="kpi-row">
+          <div class="kpi-card">
+            <span class="kpi-label">Hoje</span>
+            <span class="kpi-val">${esc(fmtBrl(c.hoje?.brl))}</span>
+            <span class="kpi-label" style="margin-top:3px;text-transform:none;">${esc(c.hoje?.chamadas || 0)} chamadas</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-label">Últimos 7 dias</span>
+            <span class="kpi-val">${esc(fmtBrl(c.ultimos_7d?.brl))}</span>
+            <span class="kpi-label" style="margin-top:3px;text-transform:none;">Média ${esc(fmtBrl(c.media_diaria_7d_brl))}/dia</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-label">Últimos 30 dias</span>
+            <span class="kpi-val">${esc(fmtBrl(c.ultimos_30d?.brl))}</span>
+            <span class="kpi-label" style="margin-top:3px;text-transform:none;">Webhook ${esc(fmtBrl(c.ultimos_30d?.brl_webhook))} · Painel ${esc(fmtBrl(c.ultimos_30d?.brl_painel))}</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-label">Mês atual</span>
+            <span class="kpi-val">${esc(fmtBrl(c.mes_atual?.brl))}</span>
+            <span class="kpi-label" style="margin-top:3px;text-transform:none;">Câmbio R$ ${Number(c.cotacao_usd_brl || 5.85).toFixed(2)}/US$</span>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="noc-table">
+            <thead><tr><th>Modelo (30 dias)</th><th>Chamadas</th><th>Tokens</th><th>USD est.</th><th>BRL est.</th></tr></thead>
+            <tbody>${modelosRows}</tbody>
+          </table>
+        </div>
+        <div class="table-wrap">
+          <table class="noc-table">
+            <thead><tr><th>Data (últimos 14 dias)</th><th>Webhook</th><th>Painel Chat</th><th>Tokens totais</th><th>Custo est.</th></tr></thead>
+            <tbody>${diarioRows}</tbody>
+          </table>
+        </div>`;
+    } catch (err) {
+      el.quickPanelBody.innerHTML = `<div class="error-banner">${esc(err.message)}</div>`;
+    }
+  }
+
   /* ---------------------------------------------------------------------- */
   /* Eventos e Inicialização                                                */
   /* ---------------------------------------------------------------------- */
@@ -917,7 +1031,7 @@
     btn.addEventListener("click", () => definirModelo(btn.dataset.model));
   });
 
-  document.querySelectorAll(".quick-btn").forEach((btn) => {
+  document.querySelectorAll(".quick-btn, .cost-pill-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       if (state.quickMode === btn.dataset.quick) {
         fecharQuickPanel();
@@ -971,4 +1085,5 @@
   definirModelo(state.modelo);
   carregarConfig();
   carregarConversas();
+  carregarResumoConsumoBarra();
 })();
