@@ -112,3 +112,33 @@ def test_resumo_formatacao_e_serializacao():
     assert "| Disaster |" in md
     assert dados["total_eventos"] == 1
     assert dados["grupos"][0]["ativo"] is True
+
+
+
+def test_buscar_historico_recupera_resolucoes_via_r_eventid():
+    from noc.consulta import buscar_historico
+
+    class FakeZabbix:
+        def _call(self, method, params):
+            assert method == "event.get"
+            if "eventids" in params:
+                assert params["eventids"] == ["501"]
+                return [{"eventid": "501", "clock": "1060"}]
+            return [{
+                "eventid": "500",
+                "objectid": "99",
+                "clock": "1000",
+                "value": "1",
+                "name": "Interface Eth-Trunk6: Link down",
+                "severity": "4",
+                "r_eventid": "501",
+                "hosts": [{"hostid": "1", "host": "LAB-PE01", "name": "LAB-PE01"}],
+                "tags": [{"tag": "backbone", "value": "1"}],
+            }]
+
+    eventos, _ = buscar_historico(FakeZabbix(), 900, 1200, severidade_min=2)
+    grupos = agrupar(eventos)
+    assert len(grupos) == 1
+    assert grupos[0].problemas == 1
+    assert grupos[0].resolucoes == 1
+    assert grupos[0].ativo is False

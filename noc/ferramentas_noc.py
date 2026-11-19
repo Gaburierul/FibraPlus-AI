@@ -572,15 +572,18 @@ def _tool_zabbix_historico_eventos(args: dict[str, Any]) -> dict[str, Any]:
             "host": g.host,
             "problema": g.problema,
             "severidade": SEVERIDADES.get(g.severidade, str(g.severidade)),
+            "status": "ATIVO" if g.ativo else "RESOLVIDO",
             "ativo": g.ativo,
             "quedas": g.problemas,
             "resolucoes": g.resolucoes,
             "primeiro": g.primeiro.horario.strftime("%d/%m %H:%M:%S"),
             "ultimo": g.ultimo.horario.strftime("%d/%m %H:%M:%S"),
+            "duracao_aprox_s": max(0, g.ultimo.clock - g.primeiro.clock) if not g.ativo else None,
             "tags": g.ultimo.tags,
         }
         for g in grupos[:limite]
     ]
+    ativos_cnt = sum(1 for g in grupos if g.ativo)
     return {
         "ok": True,
         "periodo": f"{_fmt_clock(inicio_ts, '%d/%m/%Y %H:%M')} até {_fmt_clock(fim_ts, '%d/%m/%Y %H:%M')}",
@@ -588,7 +591,8 @@ def _tool_zabbix_historico_eventos(args: dict[str, Any]) -> dict[str, Any]:
         "eventos_lidos": len(eventos),
         "eventos_filtrados": len(selecionados),
         "total_grupos": len(grupos),
-        "ativos_na_janela": sum(1 for g in grupos if g.ativo),
+        "ativos_na_janela": ativos_cnt,
+        "resolvidos_na_janela": len(grupos) - ativos_cnt,
         "flapping": flapping,
         "top_hosts": top_hosts,
         "grupos": itens,

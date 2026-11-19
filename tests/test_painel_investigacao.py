@@ -310,9 +310,18 @@ def test_custos_calculo_tokens_e_agregacao_webhook_e_chat(tmp_path):
     )
 
     ref = datetime(2026, 11, 19, 10, 0, 0, tzinfo=FUSO)
-    res = resumo_consumo(envios_path=envios, chat_db_path=store.caminho, usd_brl=5.85, agora=ref)
-    assert res["ok"] is True
-    assert res["hoje"]["chamadas_webhook"] == 1
-    assert res["ultimos_30d"]["chamadas_painel"] == 1
-    assert res["ultimos_30d"]["brl_painel"] > 0
-    assert len(res["por_modelo_30d"]) == 2
+    res_paid = resumo_consumo(
+        envios_path=envios, chat_db_path=store.caminho, usd_brl=5.85, agora=ref, webhook_gratis=False
+    )
+    assert res_paid["ok"] is True
+    assert res_paid["hoje"]["chamadas_webhook"] == 1
+    assert res_paid["ultimos_30d"]["brl_webhook"] > 0
+    assert res_paid["ultimos_30d"]["brl_painel"] > 0
+
+    res_free = resumo_consumo(
+        envios_path=envios, chat_db_path=store.caminho, usd_brl=5.85, agora=ref, webhook_gratis=True
+    )
+    assert res_free["webhook_free_tier"] is True
+    assert res_free["ultimos_30d"]["brl_webhook"] == 0.0
+    assert res_free["ultimos_30d"]["brl_webhook_economia"] > 0
+    assert res_free["ultimos_30d"]["brl"] == res_free["ultimos_30d"]["brl_painel"]

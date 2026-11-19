@@ -213,12 +213,17 @@ def main():
     try:
         from noc.custos import resumo_consumo
         c = resumo_consumo()
+        detalhe_wh = (
+            f"Webhook Free Tier [economia R$ {c['ultimos_30d']['brl_webhook_economia']:.2f}]"
+            if c.get("webhook_free_tier")
+            else f"Webhook R$ {c['ultimos_30d']['brl_webhook']:.2f}"
+        )
         print(
-            f"  💰 Consumo estimado (R$ {c['cotacao_usd_brl']:.2f}/US$): "
+            f"  💰 Consumo faturado (R$ {c['cotacao_usd_brl']:.2f}/US$): "
             f"Hoje R$ {c['hoje']['brl']:.2f} | "
             f"7 dias R$ {c['ultimos_7d']['brl']:.2f} | "
             f"30 dias R$ {c['ultimos_30d']['brl']:.2f} "
-            f"(Webhook R$ {c['ultimos_30d']['brl_webhook']:.2f} · Painel R$ {c['ultimos_30d']['brl_painel']:.2f})"
+            f"(Painel R$ {c['ultimos_30d']['brl_painel']:.2f} · {detalhe_wh})"
         )
     except Exception:  # noqa: BLE001
         pass

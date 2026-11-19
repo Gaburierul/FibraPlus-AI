@@ -171,6 +171,18 @@ def _carregar_eventos_chat(chat_db_path: Path) -> list[dict[str, Any]]:
     return itens
 
 
+def webhook_em_free_tier() -> bool:
+    """Retorna True quando o Webhook usa chave de projeto Free Tier separada do Painel."""
+    flag = os.getenv("NOC_WEBHOOK_FREE_TIER", "").strip().lower()
+    if flag in {"1", "true", "yes", "sim"}:
+        return True
+    if flag in {"0", "false", "no", "nao", "não"}:
+        return False
+    k_w = os.getenv("GEMINI_API_KEY", "").strip()
+    k_c = os.getenv("GEMINI_CHAT_API_KEY", "").strip()
+    return bool(k_w and k_c and k_w != k_c)
+
+
 def _bucket_vazio() -> dict[str, Any]:
     return {
         "chamadas": 0,
@@ -182,26 +194,43 @@ def _bucket_vazio() -> dict[str, Any]:
         "usd": 0.0,
         "brl": 0.0,
         "brl_webhook": 0.0,
+        "brl_webhook_economia": 0.0,
         "brl_painel": 0.0,
     }
 
 
-def _somar_bucket(bucket: dict[str, Any], fonte: str, tok: dict[str, Any], custo: dict[str, float]) -> None:
+def _somar_bucket(
+    bucket: dict[str, Any],
+    fonte: str,
+    tok: dict[str, Any],
+    custo: dict[str, float],
+    *,
+    webhook_gratis: bool = False,
+) -> None:
     tin = int(tok.get("total_input_tokens") or 0)
     tout = int(tok.get("total_output_tokens") or 0) + int(tok.get("total_thought_tokens") or 0)
     ttot = int(tok.get("total_tokens") or (tin + tout))
     bucket["chamadas"] += 1
     if fonte == "webhook":
         bucket["chamadas_webhook"] += 1
-        bucket["brl_webhook"] += custo["brl"]
+        if webhook_gratis:
+            bucket["brl_webhook_economia"] += custo["brl"]
+            custo_efetivo_usd = 0.0
+            custo_efetivo_brl = 0.0
+        else:
+            bucket["brl_webhook"] += custo["brl"]
+            custo_efetivo_usd = custo["usd"]
+            custo_efetivo_brl = custo["brl"]
     else:
         bucket["chamadas_painel"] += 1
         bucket["brl_painel"] += custo["brl"]
+        custo_efetivo_usd = custo["usd"]
+        custo_efetivo_brl = custo["brl"]
     bucket["tokens_entrada"] += tin
     bucket["tokens_saida"] += tout
     bucket["tokens_total"] += ttot
-    bucket["usd"] += custo["usd"]
-    bucket["brl"] += custo["brl"]
+    bucket["usd"] += custo_efetivo_usd
+    bucket["brl"] += custo_efetivo_brl
 
 
 def _arredondar_bucket(b: dict[str, Any]) -> dict[str, Any]:
@@ -210,6 +239,7 @@ def _arredondar_bucket(b: dict[str, Any]) -> dict[str, Any]:
         "usd": round(b["usd"], 4),
         "brl": round(b["brl"], 2),
         "brl_webhook": round(b["brl_webhook"], 2),
+        "brl_webhook_economia": round(b["brl_webhook_economia"], 2),
         "brl_painel": round(b["brl_painel"], 2),
     }
 
@@ -220,12 +250,14 @@ def resumo_consumo(
     chat_db_path: Path | None = None,
     usd_brl: float | None = None,
     agora: datetime | None = None,
+    webhook_gratis: bool | None = None,
 ) -> dict[str, Any]:
     """Consolida o consumo estimado (hoje, 7 dias, 30 dias, mês atual, por modelo e diário)."""
     cotacao = usd_brl if usd_brl is not None else obter_cotacao_usd_brl()
     ref = agora if agora is not None else datetime.now(FUSO)
     if ref.tzinfo is None:
         ref = ref.replace(tzinfo=FUSO)
+    wh_free = webhook_em_free_tier() if webhook_gratis is None else webhook_gratis
 
     modelo_webhook = os.getenv("NOC_AI_MODEL", "gemini-3.5-flash-lite").strip() or "gemini-3.5-flash-lite"
     eventos = _carregar_eventos_webhook(envios_path or ENVIOS_PATH_PADRAO, modelo_webhook)
@@ -244,10 +276,12 @@ def resumo_consumo(
 
     por_modelo: dict[str, dict[str, Any]] = defaultdict(lambda: {
         "modelo": "",
+        "regime": "Paid Tier",
         "chamadas_30d": 0,
         "tokens_30d": 0,
         "usd_30d": 0.0,
         "brl_30d": 0.0,
+        "brl_economia_30d": 0.0,
     })
     por_dia: dict[str, dict[str, Any]] = {}
 
@@ -257,22 +291,28 @@ def resumo_consumo(
         modelo: str = ev["modelo"]
         tok: dict[str, Any] = ev["tokens"]
         custo = calcular_custo_tokens(modelo, tok, usd_brl=cotacao)
+        gratis_ev = (fonte == "webhook" and wh_free)
 
-        _somar_bucket(b_total, fonte, tok, custo)
+        _somar_bucket(b_total, fonte, tok, custo, webhook_gratis=wh_free)
         if dt.date() == hoje_data:
-            _somar_bucket(b_hoje, fonte, tok, custo)
+            _somar_bucket(b_hoje, fonte, tok, custo, webhook_gratis=wh_free)
         if dt >= inicio_7d:
-            _somar_bucket(b_7d, fonte, tok, custo)
+            _somar_bucket(b_7d, fonte, tok, custo, webhook_gratis=wh_free)
         if dt >= inicio_30d:
-            _somar_bucket(b_30d, fonte, tok, custo)
-            m = por_modelo[modelo]
-            m["modelo"] = modelo
+            _somar_bucket(b_30d, fonte, tok, custo, webhook_gratis=wh_free)
+            chave_mod = f"{modelo} (Webhook Free Tier)" if gratis_ev else modelo
+            m = por_modelo[chave_mod]
+            m["modelo"] = chave_mod
+            m["regime"] = "Free Tier (R$ 0,00)" if gratis_ev else "Paid Tier"
             m["chamadas_30d"] += 1
             m["tokens_30d"] += int(tok.get("total_tokens") or 0)
-            m["usd_30d"] += custo["usd"]
-            m["brl_30d"] += custo["brl"]
+            if gratis_ev:
+                m["brl_economia_30d"] += custo["brl"]
+            else:
+                m["usd_30d"] += custo["usd"]
+                m["brl_30d"] += custo["brl"]
         if dt.year == ref.year and dt.month == ref.month:
-            _somar_bucket(b_mes, fonte, tok, custo)
+            _somar_bucket(b_mes, fonte, tok, custo, webhook_gratis=wh_free)
         if dt >= inicio_14d:
             chave_dia = dt.strftime("%Y-%m-%d")
             if chave_dia not in por_dia:
@@ -283,26 +323,36 @@ def resumo_consumo(
                     "chamadas_painel": 0,
                     "tokens_total": 0,
                     "brl": 0.0,
+                    "brl_economia": 0.0,
                 }
             row = por_dia[chave_dia]
             if fonte == "webhook":
                 row["chamadas_webhook"] += 1
+                if wh_free:
+                    row["brl_economia"] += custo["brl"]
+                else:
+                    row["brl"] += custo["brl"]
             else:
                 row["chamadas_painel"] += 1
+                row["brl"] += custo["brl"]
             row["tokens_total"] += int(tok.get("total_tokens") or 0)
-            row["brl"] += custo["brl"]
 
     modelos_lista = [
         {
             **m,
             "usd_30d": round(m["usd_30d"], 4),
             "brl_30d": round(m["brl_30d"], 2),
+            "brl_economia_30d": round(m["brl_economia_30d"], 2),
         }
-        for m in sorted(por_modelo.values(), key=lambda x: -x["brl_30d"])
+        for m in sorted(por_modelo.values(), key=lambda x: (-x["brl_30d"], -x["chamadas_30d"]))
     ]
 
     dias_lista = [
-        {**d, "brl": round(d["brl"], 2)}
+        {
+            **d,
+            "brl": round(d["brl"], 2),
+            "brl_economia": round(d["brl_economia"], 2),
+        }
         for d in sorted(por_dia.values(), key=lambda x: x["iso"], reverse=True)
     ]
 
@@ -313,6 +363,7 @@ def resumo_consumo(
         "ok": True,
         "atualizado_em": ref.strftime("%d/%m/%Y %H:%M:%S"),
         "cotacao_usd_brl": cotacao,
+        "webhook_free_tier": wh_free,
         "hoje": _arredondar_bucket(b_hoje),
         "ultimos_7d": _arredondar_bucket(b_7d),
         "ultimos_30d": _arredondar_bucket(b_30d),

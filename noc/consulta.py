@@ -217,11 +217,12 @@ def buscar_historico(client, inicio_ts: int, fim_ts: int,
         raise ValueError("O fim da janela deve ser posterior ao início.")
     avisos: list[str] = []
     vistos: dict[str, Evento] = {}
+    recuperacoes_pendentes: dict[str, Evento] = {}
     pendentes = [(inicio_ts, fim_ts)]
     while pendentes:
         de, ate = pendentes.pop()
         lote = client._call("event.get", {
-            "output": ["eventid", "objectid", "clock", "value", "name", "severity"],
+            "output": ["eventid", "objectid", "clock", "value", "name", "severity", "r_eventid"],
             "source": 0,
             "object": 0,
             "selectHosts": ["hostid", "host", "name"],
@@ -243,6 +244,39 @@ def buscar_historico(client, inicio_ts: int, fim_ts: int,
         for bruto in lote:
             evento = _evento(bruto)
             vistos[evento.eventid] = evento
+            r_id = str(bruto.get("r_eventid") or "0").strip()
+            if evento.problema_ativo and r_id and r_id != "0":
+                recuperacoes_pendentes[r_id] = evento
+
+    # No Zabbix, eventos de recuperação (value=0) têm severity=0 e não vêm quando
+    # severidade_min > 0. Buscamos os r_eventid em lote para marcar resoluções reais.
+    faltantes = [rid for rid in recuperacoes_pendentes if rid not in vistos]
+    for i in range(0, len(faltantes), 500):
+        fatia_ids = faltantes[i:i + 500]
+        try:
+            rec_lote = client._call("event.get", {
+                "eventids": fatia_ids,
+                "output": ["eventid", "clock"],
+            })
+        except Exception:  # noqa: BLE001
+            break
+        for rec in rec_lote or []:
+            rid = str(rec.get("eventid") or "")
+            r_clock = int(rec.get("clock") or 0)
+            origem_prob = recuperacoes_pendentes.get(rid)
+            if origem_prob and 0 < r_clock <= fim_ts:
+                vistos[rid] = Evento(
+                    eventid=rid,
+                    objectid=origem_prob.objectid,
+                    clock=r_clock,
+                    problema_ativo=False,
+                    severidade=origem_prob.severidade,
+                    host=origem_prob.host,
+                    host_tecnico=origem_prob.host_tecnico,
+                    problema=origem_prob.problema,
+                    tags=dict(origem_prob.tags),
+                )
+
     eventos = sorted(vistos.values(), key=lambda e: (e.clock, e.eventid))
     return eventos, avisos
 

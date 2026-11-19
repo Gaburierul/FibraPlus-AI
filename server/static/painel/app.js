@@ -932,9 +932,9 @@
             .map(
               (m) => `<tr>
                 <td class="mono">${esc(m.modelo)}</td>
+                <td>${m.brl_economia_30d > 0 ? `<span class="badge badge-ok">Free Tier (Economia ${esc(fmtBrl(m.brl_economia_30d))})</span>` : `<span class="badge badge-neutral">Paid Tier</span>`}</td>
                 <td class="mono">${esc(m.chamadas_30d)}</td>
                 <td class="mono">${Number(m.tokens_30d || 0).toLocaleString("pt-BR")}</td>
-                <td class="mono">US$ ${Number(m.usd_30d || 0).toFixed(4)}</td>
                 <td class="mono"><strong>${esc(fmtBrl(m.brl_30d))}</strong></td>
               </tr>`
             )
@@ -946,7 +946,7 @@
             .map(
               (d) => `<tr>
                 <td class="mono">${esc(d.data)}</td>
-                <td class="mono">${esc(d.chamadas_webhook)}</td>
+                <td class="mono">${esc(d.chamadas_webhook)}${c.webhook_free_tier && d.chamadas_webhook ? ' <span class="badge badge-ok">Grátis</span>' : ""}</td>
                 <td class="mono">${esc(d.chamadas_painel)}</td>
                 <td class="mono">${Number(d.tokens_total || 0).toLocaleString("pt-BR")}</td>
                 <td class="mono"><strong>${esc(fmtBrl(d.brl))}</strong></td>
@@ -955,12 +955,16 @@
             .join("")
         : `<tr><td colspan="5">Sem dados nos últimos 14 dias.</td></tr>`;
 
+      const sub30d = c.webhook_free_tier
+        ? `Painel ${fmtBrl(c.ultimos_30d?.brl_painel)} · Webhook Free Tier (economia ${fmtBrl(c.ultimos_30d?.brl_webhook_economia)})`
+        : `Webhook ${fmtBrl(c.ultimos_30d?.brl_webhook)} · Painel ${fmtBrl(c.ultimos_30d?.brl_painel)}`;
+
       el.quickPanelBody.innerHTML = `
         <div class="kpi-row">
           <div class="kpi-card">
-            <span class="kpi-label">Hoje</span>
+            <span class="kpi-label">Hoje (faturado)</span>
             <span class="kpi-val">${esc(fmtBrl(c.hoje?.brl))}</span>
-            <span class="kpi-label" style="margin-top:3px;text-transform:none;">${esc(c.hoje?.chamadas || 0)} chamadas</span>
+            <span class="kpi-label" style="margin-top:3px;text-transform:none;">${esc(c.hoje?.chamadas_painel || 0)} painel · ${esc(c.hoje?.chamadas_webhook || 0)} webhook</span>
           </div>
           <div class="kpi-card">
             <span class="kpi-label">Últimos 7 dias</span>
@@ -970,7 +974,7 @@
           <div class="kpi-card">
             <span class="kpi-label">Últimos 30 dias</span>
             <span class="kpi-val">${esc(fmtBrl(c.ultimos_30d?.brl))}</span>
-            <span class="kpi-label" style="margin-top:3px;text-transform:none;">Webhook ${esc(fmtBrl(c.ultimos_30d?.brl_webhook))} · Painel ${esc(fmtBrl(c.ultimos_30d?.brl_painel))}</span>
+            <span class="kpi-label" style="margin-top:3px;text-transform:none;">${esc(sub30d)}</span>
           </div>
           <div class="kpi-card">
             <span class="kpi-label">Mês atual</span>
@@ -980,13 +984,13 @@
         </div>
         <div class="table-wrap">
           <table class="noc-table">
-            <thead><tr><th>Modelo (30 dias)</th><th>Chamadas</th><th>Tokens</th><th>USD est.</th><th>BRL est.</th></tr></thead>
+            <thead><tr><th>Modelo (30 dias)</th><th>Regime</th><th>Chamadas</th><th>Tokens</th><th>Custo faturado</th></tr></thead>
             <tbody>${modelosRows}</tbody>
           </table>
         </div>
         <div class="table-wrap">
           <table class="noc-table">
-            <thead><tr><th>Data (últimos 14 dias)</th><th>Webhook</th><th>Painel Chat</th><th>Tokens totais</th><th>Custo est.</th></tr></thead>
+            <thead><tr><th>Data (últimos 14 dias)</th><th>Webhook</th><th>Painel Chat</th><th>Tokens totais</th><th>Custo faturado</th></tr></thead>
             <tbody>${diarioRows}</tbody>
           </table>
         </div>`;
