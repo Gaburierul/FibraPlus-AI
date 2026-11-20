@@ -365,11 +365,14 @@
     const custoTxt = custo && typeof custo.brl === "number"
       ? `<span>Custo est.: ${esc(fmtBrl(custo.brl))}</span>`
       : "";
+    const thoughtTxt = tok.total_thought_tokens
+      ? ` · raciocínio ${esc(tok.total_thought_tokens)}`
+      : "";
     const footerHtml =
       msg.papel === "assistant" && tok.total_tokens
         ? `<div class="msg-footer">
              <span>Modelo: ${esc(msg.modelo || state.modelo)}</span>
-             <span>Tokens: ${esc(tok.total_tokens)} (entrada ${esc(tok.total_input_tokens || 0)} · saída ${esc(tok.total_output_tokens || 0)})</span>
+             <span>Tokens: ${esc(tok.total_tokens)} (entrada ${esc(tok.total_input_tokens || 0)} · saída ${esc(tok.total_output_tokens || 0)}${thoughtTxt})</span>
              ${custoTxt}
            </div>`
         : "";
@@ -522,6 +525,7 @@
               thoughtContent.textContent = pensamentoAcumulado;
             } else if (ev.tipo === "ferramenta_inicio") {
               ferramentasAtivas.push({
+                call_id: ev.call_id || "",
                 nome: ev.nome,
                 rotulo: ev.rotulo,
                 resumo: "consultando...",
@@ -531,7 +535,9 @@
               toolsSlot.innerHTML = criarHtmlFerramentas(ferramentasAtivas, true);
               scrollToBottom();
             } else if (ev.tipo === "ferramenta_fim") {
-              const alvo = [...ferramentasAtivas].reverse().find((f) => f.nome === ev.nome && f.running);
+              const alvo =
+                (ev.call_id && ferramentasAtivas.find((f) => f.call_id === ev.call_id)) ||
+                ferramentasAtivas.find((f) => f.nome === ev.nome && f.running);
               if (alvo) {
                 alvo.running = false;
                 alvo.ok = ev.ok;
@@ -559,9 +565,12 @@
                 const custoSpan = ev.custo_estimado && typeof ev.custo_estimado.brl === "number"
                   ? `<span>Custo est.: ${esc(fmtBrl(ev.custo_estimado.brl))}</span>`
                   : "";
+                const thoughtSpan = ev.tokens.total_thought_tokens
+                  ? ` · raciocínio ${esc(ev.tokens.total_thought_tokens)}`
+                  : "";
                 footerEl.innerHTML = `
                   <span>Modelo: ${esc(ev.modelo || state.modelo)}</span>
-                  <span>Tokens: ${esc(ev.tokens.total_tokens)} (entrada ${esc(ev.tokens.total_input_tokens || 0)} · saída ${esc(ev.tokens.total_output_tokens || 0)})</span>
+                  <span>Tokens: ${esc(ev.tokens.total_tokens)} (entrada ${esc(ev.tokens.total_input_tokens || 0)} · saída ${esc(ev.tokens.total_output_tokens || 0)}${thoughtSpan})</span>
                   ${custoSpan}`;
               }
               copyBtn.classList.remove("hidden");

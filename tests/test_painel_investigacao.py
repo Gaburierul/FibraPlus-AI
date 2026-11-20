@@ -325,3 +325,212 @@ def test_custos_calculo_tokens_e_agregacao_webhook_e_chat(tmp_path):
     assert res_free["ultimos_30d"]["brl_webhook"] == 0.0
     assert res_free["ultimos_30d"]["brl_webhook_economia"] > 0
     assert res_free["ultimos_30d"]["brl"] == res_free["ultimos_30d"]["brl_painel"]
+
+
+def test_zabbix_buscar_hosts_por_hostgroup_sem_acento_e_multiplas_cidades():
+    from noc.ferramentas_noc import executar_ferramenta, limpar_cache_hosts_zabbix
+
+    limpar_cache_hosts_zabbix()
+    fake_hosts = [
+        {
+            "hostid": "1",
+            "host": "LAB-CA-ZTE-OLT01",
+            "name": "LAB-CA-ZTE-OLT01",
+            "status": "0",
+            "interfaces": [{"ip": "198.51.100.10"}],
+            "hostgroups": [{"name": "CIDADE ALFA"}, {"name": "OLT"}],
+        },
+        {
+            "hostid": "2",
+            "host": "LAB-PE-HW-PE01",
+            "name": "LAB-PE-HW-PE01",
+            "status": "0",
+            "interfaces": [{"ip": "198.51.100.20"}],
+            "hostgroups": [{"name": "PARAISO EXEMPLO"}, {"name": "BACKBONE"}],
+        },
+        {
+            "hostid": "3",
+            "host": "LAB-OT-HW-PE01",
+            "name": "LAB-OT-HW-PE01",
+            "status": "0",
+            "interfaces": [{"ip": "198.51.100.30"}],
+            "hostgroups": [{"name": "OUTRA LOCALIDADE"}],
+        },
+    ]
+
+    fake_zbx = MagicMock()
+    fake_zbx.__enter__.return_value = fake_zbx
+    fake_zbx.get_hosts.return_value = fake_hosts
+
+    with patch("clients.zabbix.ZabbixClient", return_value=fake_zbx):
+        ok, raw, _ = executar_ferramenta(
+            "zabbix_buscar_hosts",
+            {"buscas": ["Cidade Álfá", "Paraíso Exemplo"]},
+        )
+        assert ok is True
+        dados = json.loads(raw)
+        nomes = [h["name"] for h in dados["hosts"]]
+        assert nomes == ["LAB-CA-ZTE-OLT01", "LAB-PE-HW-PE01"]
+        assert fake_zbx.get_hosts.call_count == 1
+
+        # Segunda chamada deve reutilizar o cache em memória
+        ok2, raw2, _ = executar_ferramenta("zabbix_buscar_hosts", {"busca": "Outra Localidade"})
+        assert ok2 is True
+        assert [h["name"] for h in json.loads(raw2)["hosts"]] == ["LAB-OT-HW-PE01"]
+        assert fake_zbx.get_hosts.call_count == 1
+
+    limpar_cache_hosts_zabbix()
+
+
+def test_filtrar_eventos_inteligente_qualquer_termo_e_hostgroup():
+    from noc.consulta import Evento
+    from noc.ferramentas_noc import _filtrar_eventos_inteligente
+
+    e1 = Evento(
+        eventid="1",
+        objectid="101",
+        clock=1700000000,
+        problema_ativo=True,
+        severidade=4,
+        host="LAB-CA-HW-PE01",
+        host_tecnico="LAB-CA-HW-PE01",
+        problema="Interface Eth-Trunk1 down",
+        tags={"backbone": "1"},
+    )
+    e2 = Evento(
+        eventid="2",
+        objectid="102",
+        clock=1700000010,
+        problema_ativo=True,
+        severidade=3,
+        host="LAB-PE-ZTE-OLT01",
+        host_tecnico="LAB-PE-ZTE-OLT01",
+        problema="Atenuacao optica RX",
+        tags={"backbone": "2"},
+    )
+    grupos_mapa = {
+        "lab-ca-hw-pe01": "cidade alfa backbone",
+        "lab-pe-zte-olt01": "paraiso exemplo olt",
+    }
+
+    # Lógica OU (qualquer_termo=True) casa ambas as cidades via hostgroup sem acento
+    res_or = _filtrar_eventos_inteligente(
+        [e1, e2],
+        termos=["Cidade Alfa", "Paraíso Exemplo"],
+        excluir=[],
+        escopo="infra",
+        qualquer_termo=True,
+        grupos_por_host=grupos_mapa,
+    )
+    assert len(res_or) == 2
+
+    # Lógica E (qualquer_termo=False) exige todos os termos no mesmo evento
+    res_and = _filtrar_eventos_inteligente(
+        [e1, e2],
+        termos=["Cidade Alfa", "Paraíso Exemplo"],
+        excluir=[],
+        escopo="infra",
+        qualquer_termo=False,
+        grupos_por_host=grupos_mapa,
+    )
+    assert res_and == []
+
+
+def test_truncar_saida_progressivo_preserva_mais_itens():
+    from noc.ferramentas_noc import MAX_CHARS_RETORNO_FERRAMENTA, _truncar_saida
+
+    itens = [
+        {"idx": i, "host": f"LAB-HOST-{i:03d}", "detalhe": "X" * 350}
+        for i in range(90)
+    ]
+    raw = _truncar_saida({"ok": True, "grupos": itens})
+    assert len(raw) <= MAX_CHARS_RETORNO_FERRAMENTA
+    parsed = json.loads(raw)
+    assert parsed["ok"] is True
+    # Preserva muito mais do que o antigo corte brusco de 15 itens
+    assert len(parsed["grupos"]) >= 45
+    assert "grupos_truncado" in parsed
+
+
+def test_agente_execucao_paralela_e_aviso_incomplete():
+    from noc.agente_investigacao import (
+        MAX_CHAMADAS_FERRAMENTA,
+        MAX_OUTPUT_TOKENS,
+        MAX_RODADAS,
+    )
+
+    assert MAX_OUTPUT_TOKENS >= 16_384
+    assert MAX_CHAMADAS_FERRAMENTA >= 24
+    assert MAX_RODADAS >= 12
+
+    chamadas_input = []
+
+    def falso_create(**kwargs):
+        assert kwargs["generation_config"]["max_output_tokens"] == MAX_OUTPUT_TOKENS
+        chamadas_input.append(json.loads(json.dumps(kwargs["input"])))
+        if len(chamadas_input) == 1:
+            return iter([
+                SimpleNamespace(
+                    event_type="step.start",
+                    index=0,
+                    step=SimpleNamespace(
+                        type="function_call",
+                        id="fc_a",
+                        name="zabbix_metricas_host",
+                        arguments={"host": "LAB-HOST-A"},
+                    ),
+                ),
+                SimpleNamespace(
+                    event_type="step.start",
+                    index=1,
+                    step=SimpleNamespace(
+                        type="function_call",
+                        id="fc_b",
+                        name="zabbix_metricas_host",
+                        arguments={"host": "LAB-HOST-B"},
+                    ),
+                ),
+                SimpleNamespace(
+                    event_type="interaction.completed",
+                    interaction=SimpleNamespace(
+                        status="requires_action",
+                        steps=None,
+                        usage={"total_input_tokens": 100, "total_output_tokens": 40, "total_tokens": 140},
+                    ),
+                ),
+            ])
+        return iter([
+            SimpleNamespace(event_type="step.start", index=0, step=SimpleNamespace(type="model_output")),
+            SimpleNamespace(
+                event_type="step.delta",
+                index=0,
+                delta=SimpleNamespace(type="text", text="Diagnóstico parcial..."),
+            ),
+            SimpleNamespace(
+                event_type="interaction.completed",
+                interaction=SimpleNamespace(
+                    status="incomplete",
+                    steps=None,
+                    usage={"total_input_tokens": 200, "total_output_tokens": 50, "total_tokens": 250},
+                ),
+            ),
+        ])
+
+    fake_client = SimpleNamespace(interactions=SimpleNamespace(create=falso_create))
+
+    def fake_exec(nome, args):
+        return True, json.dumps({"ok": True, "host": args.get("host")}), f"ok {args.get('host')}"
+
+    with patch("noc.agente_investigacao.executar_ferramenta", side_effect=fake_exec):
+        eventos = list(
+            investigar_streaming("Compare LAB-HOST-A e LAB-HOST-B", modelo="gemini-4-neon", client=fake_client)
+        )
+
+    fims = [e for e in eventos if e["tipo"] == "ferramenta_fim"]
+    assert [f["call_id"] for f in fims] == ["fc_a", "fc_b"]
+    # Ordem dos function_result no histórico deve respeitar fc_a depois fc_b
+    fresults = [s for s in chamadas_input[1] if s.get("type") == "function_result"]
+    assert [r["call_id"] for r in fresults] == ["fc_a", "fc_b"]
+
+    concluido = next(e for e in eventos if e["tipo"] == "concluido")
+    assert "limite máximo de tokens de saída" in concluido["texto_completo"]

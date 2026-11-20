@@ -16,6 +16,7 @@ Diretrizes de segurança:
 from __future__ import annotations
 
 import json
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -27,11 +28,96 @@ from noc.consulta import (
     agrupar,
     buscar_ativos,
     buscar_historico,
-    filtrar,
 )
+from noc.parser import normalizar
 
 RAIZ = Path(__file__).resolve().parent.parent
-MAX_CHARS_RETORNO_FERRAMENTA = 14_000
+MAX_CHARS_RETORNO_FERRAMENTA = 28_000
+
+_CACHE_HOSTS_LOCK = threading.Lock()
+_CACHE_HOSTS_TS: float = 0.0
+_CACHE_HOSTS_DATA: list[dict[str, Any]] = []
+_CACHE_HOSTS_TTL_S = 300.0
+
+
+def limpar_cache_hosts_zabbix() -> None:
+    """Limpa o cache em memória do catálogo de hosts/grupos do Zabbix."""
+    global _CACHE_HOSTS_TS, _CACHE_HOSTS_DATA
+    with _CACHE_HOSTS_LOCK:
+        _CACHE_HOSTS_TS = 0.0
+        _CACHE_HOSTS_DATA = []
+
+
+def _obter_catalogo_hosts_zabbix(zbx: Any) -> list[dict[str, Any]]:
+    """Carrega e mantém em cache (5 min) todos os hosts com interfaces e hostgroups (cidades/POPs)."""
+    global _CACHE_HOSTS_TS, _CACHE_HOSTS_DATA
+    agora = time.monotonic()
+    with _CACHE_HOSTS_LOCK:
+        if _CACHE_HOSTS_DATA and (agora - _CACHE_HOSTS_TS) < _CACHE_HOSTS_TTL_S:
+            return _CACHE_HOSTS_DATA
+
+    brutos = zbx.get_hosts(search=None, limit=2000, with_interfaces=True, with_groups=True)
+    catalogo: list[dict[str, Any]] = []
+    for h in brutos or []:
+        ips = sorted({
+            str(iface.get("ip", "")).strip()
+            for iface in (h.get("interfaces") or [])
+            if iface.get("ip") and iface.get("ip") != "127.0.0.1"
+        })
+        grupos = [
+            str(g.get("name", "")).strip()
+            for g in (h.get("hostgroups") or h.get("groups") or [])
+            if g.get("name")
+        ]
+        nome = str(h.get("name") or h.get("host") or "")
+        host_tec = str(h.get("host") or "")
+        texto_norm = normalizar(" ".join([nome, host_tec, *ips, *grupos]))
+        catalogo.append({
+            "hostid": h.get("hostid"),
+            "name": nome,
+            "host": host_tec,
+            "monitorado": str(h.get("status", "0")) == "0",
+            "ips": ips,
+            "grupos": grupos,
+            "_texto_norm": texto_norm,
+        })
+
+    with _CACHE_HOSTS_LOCK:
+        _CACHE_HOSTS_TS = agora
+        _CACHE_HOSTS_DATA = catalogo
+    return catalogo
+
+
+def _filtrar_eventos_inteligente(
+    eventos: list[Any],
+    *,
+    termos: list[str],
+    excluir: list[str],
+    escopo: str,
+    qualquer_termo: bool,
+    grupos_por_host: dict[str, str],
+) -> list[Any]:
+    """Filtra eventos por escopo, inclusão (AND ou OR) e exclusão considerando também os hostgroups (cidades)."""
+    incluir_n = [normalizar(t) for t in termos if t.strip()]
+    excluir_n = [normalizar(t) for t in excluir if t.strip()]
+    resultado = []
+    for e in eventos:
+        if escopo == "infra" and e.eh_cliente:
+            continue
+        if escopo == "clientes" and not e.eh_cliente:
+            continue
+        texto = e.texto_busca()
+        extra_grupos = grupos_por_host.get(e.host.lower()) or grupos_por_host.get(e.host_tecnico.lower()) or ""
+        if extra_grupos:
+            texto = f"{texto} {extra_grupos}"
+        if incluir_n:
+            casou = any(t in texto for t in incluir_n) if qualquer_termo else all(t in texto for t in incluir_n)
+            if not casou:
+                continue
+        if excluir_n and any(t in texto for t in excluir_n):
+            continue
+        resultado.append(e)
+    return resultado
 
 
 def _parse_data_hora_local(texto: str) -> int:
@@ -94,18 +180,22 @@ def _fmt_valor_metrica(nome: str, valor: Any, unidades: str = "") -> str:
 
 
 def _truncar_saida(dados: dict[str, Any]) -> str:
-    texto = json.dumps(dados, ensure_ascii=False)
+    texto = json.dumps(dados, ensure_ascii=False, separators=(",", ":"))
     if len(texto) <= MAX_CHARS_RETORNO_FERRAMENTA:
         return texto
-    # Reduz listas grandes preservando a estrutura JSON válida
-    enxuto = dict(dados)
-    for chave, val in list(enxuto.items()):
-        if isinstance(val, list) and len(val) > 15:
-            enxuto[chave] = val[:15]
-            enxuto[f"{chave}_truncado"] = f"Exibindo 15 de {len(val)} itens."
-    texto = json.dumps(enxuto, ensure_ascii=False)
-    if len(texto) <= MAX_CHARS_RETORNO_FERRAMENTA:
-        return texto
+    # Reduz listas grandes progressivamente preservando o máximo de dados válidos
+    for limite_lista in (70, 45, 30, 20, 12):
+        enxuto = dict(dados)
+        reduziu = False
+        for chave, val in list(enxuto.items()):
+            if isinstance(val, list) and len(val) > limite_lista:
+                enxuto[chave] = val[:limite_lista]
+                enxuto[f"{chave}_truncado"] = f"Exibindo {limite_lista} de {len(val)} itens."
+                reduziu = True
+        if reduziu:
+            texto = json.dumps(enxuto, ensure_ascii=False, separators=(",", ":"))
+            if len(texto) <= MAX_CHARS_RETORNO_FERRAMENTA:
+                return texto
     return texto[: MAX_CHARS_RETORNO_FERRAMENTA - 80] + ' ... [saída truncada por limite de tamanho]"}'
 
 
@@ -147,7 +237,17 @@ TOOLS_DECLARATIONS: list[dict[str, Any]] = [
                 "termos": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Termos que precisam casar no host, problema ou tags (ex.: ['POP', 'BGP']).",
+                    "description": (
+                        "Filtros por nome completo da cidade/hostgroup (ex.: 'Cidade A', 'Cidade B'), "
+                        "sigla do POP, host, protocolo ou tag."
+                    ),
+                },
+                "qualquer_termo": {
+                    "type": "boolean",
+                    "description": (
+                        "Se true, usa lógica OU (basta casar UM dos termos — ideal para consultar "
+                        "várias cidades ou equipamentos em uma única chamada). Padrão false (E)."
+                    ),
                 },
                 "excluir": {
                     "type": "array",
@@ -165,7 +265,7 @@ TOOLS_DECLARATIONS: list[dict[str, Any]] = [
                 },
                 "limite": {
                     "type": "integer",
-                    "description": "Máximo de grupos retornados (padrão 40, máx 100).",
+                    "description": "Máximo de grupos retornados (padrão 60, máx 150).",
                 },
             },
         },
@@ -195,7 +295,11 @@ TOOLS_DECLARATIONS: list[dict[str, Any]] = [
                 "termos": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Filtros de inclusão (host, cidade, protocolo, tag).",
+                    "description": "Filtros de inclusão (nome da cidade/hostgroup, sigla, host, protocolo ou tag).",
+                },
+                "qualquer_termo": {
+                    "type": "boolean",
+                    "description": "Se true, usa lógica OU para consultar várias cidades/hosts em uma só chamada (padrão false).",
                 },
                 "excluir": {
                     "type": "array",
@@ -213,7 +317,7 @@ TOOLS_DECLARATIONS: list[dict[str, Any]] = [
                 },
                 "limite": {
                     "type": "integer",
-                    "description": "Máximo de grupos detalhados (padrão 40, máx 100).",
+                    "description": "Máximo de grupos detalhados (padrão 60, máx 150).",
                 },
             },
         },
@@ -221,20 +325,28 @@ TOOLS_DECLARATIONS: list[dict[str, Any]] = [
     {
         "type": "function",
         "name": "zabbix_buscar_hosts",
-        "description": "Procura hosts cadastrados no Zabbix por parte do nome, sigla de cidade/POP ou função (ex.: 'POP', 'OLT', 'BNG', 'PE01').",
+        "description": (
+            "Procura hosts cadastrados no Zabbix comparando sem acento contra nome, IP e grupos de hosts "
+            "(inclui nomes completos das cidades/POPs cadastrados como hostgroups). "
+            "Aceita uma lista em 'buscas' para localizar várias cidades/POPs em uma única chamada."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
                 "busca": {
                     "type": "string",
-                    "description": "Trecho do nome do equipamento ou sigla da cidade/POP.",
+                    "description": "Trecho do nome do equipamento, cidade, sigla do POP ou IP (vazio para listar resumo).",
+                },
+                "buscas": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Lista de cidades/siglas/equipamentos para buscar de uma só vez (lógica OU, ex.: ['Cidade A', 'Cidade B', 'OLT']).",
                 },
                 "limite": {
                     "type": "integer",
-                    "description": "Máximo de hosts (padrão 30, máx 100).",
+                    "description": "Máximo de hosts (padrão 50, máx 200).",
                 },
             },
-            "required": ["busca"],
         },
     },
     {
@@ -262,7 +374,7 @@ TOOLS_DECLARATIONS: list[dict[str, Any]] = [
                 },
                 "limite": {
                     "type": "integer",
-                    "description": "Máximo de métricas retornadas (padrão 60, máx 150).",
+                    "description": "Máximo de métricas retornadas (padrão 80, máx 180).",
                 },
             },
             "required": ["host"],
@@ -468,37 +580,64 @@ TOOLS_DECLARATIONS: list[dict[str, Any]] = [
 # Implementações das ferramentas
 # ---------------------------------------------------------------------------
 
+def _mapa_grupos_por_host(zbx: Any) -> dict[str, str]:
+    try:
+        catalogo = _obter_catalogo_hosts_zabbix(zbx)
+    except Exception:  # noqa: BLE001
+        return {}
+    mapa: dict[str, str] = {}
+    for h in catalogo:
+        g_norm = normalizar(" ".join(h.get("grupos") or []))
+        if not g_norm:
+            continue
+        if h.get("name"):
+            mapa[h["name"].lower()] = g_norm
+        if h.get("host"):
+            mapa[h["host"].lower()] = g_norm
+    return mapa
+
+
 def _tool_zabbix_problemas_ativos(args: dict[str, Any]) -> dict[str, Any]:
     from clients.zabbix import ZabbixClient
 
     termos = [str(t) for t in (args.get("termos") or []) if str(t).strip()]
     excluir = [str(t) for t in (args.get("excluir") or []) if str(t).strip()]
+    qualquer_termo = bool(args.get("qualquer_termo", False))
     escopo = str(args.get("escopo") or "infra").strip().lower()
     if escopo not in {"infra", "clientes", "todos"}:
         escopo = "infra"
     sev_min = max(0, min(int(args.get("severidade_min", 2)), 5))
-    limite = max(1, min(int(args.get("limite", 40)), 100))
+    limite = max(1, min(int(args.get("limite", 60)), 150))
 
     with ZabbixClient() as zbx:
         eventos, avisos = buscar_ativos(zbx, severidade_min=sev_min)
-    selecionados = filtrar(eventos, termos=termos, excluir=excluir, escopo=escopo)
+        grupos_mapa = _mapa_grupos_por_host(zbx) if (termos or excluir) else {}
+    selecionados = _filtrar_eventos_inteligente(
+        eventos,
+        termos=termos,
+        excluir=excluir,
+        escopo=escopo,
+        qualquer_termo=qualquer_termo,
+        grupos_por_host=grupos_mapa,
+    )
     grupos = agrupar(selecionados)
     grupos.sort(key=lambda g: (-g.severidade, -g.ultimo.clock))
 
     infra_total = sum(1 for g in grupos if not g.eh_cliente)
     clientes_total = sum(1 for g in grupos if g.eh_cliente)
-    itens = [
-        {
+    itens = []
+    for g in grupos[:limite]:
+        item: dict[str, Any] = {
             "host": g.host,
             "problema": g.problema,
             "severidade": SEVERIDADES.get(g.severidade, str(g.severidade)),
             "severidade_num": g.severidade,
             "tipo": "cliente" if g.eh_cliente else "infra",
             "desde": g.ultimo.horario.strftime("%d/%m/%Y %H:%M:%S"),
-            "tags": g.ultimo.tags,
         }
-        for g in grupos[:limite]
-    ]
+        if g.ultimo.tags:
+            item["tags"] = g.ultimo.tags
+        itens.append(item)
     return {
         "ok": True,
         "consulta_em": datetime.now(FUSO).strftime("%d/%m/%Y %H:%M:%S"),
@@ -534,15 +673,24 @@ def _tool_zabbix_historico_eventos(args: dict[str, Any]) -> dict[str, Any]:
 
     termos = [str(t) for t in (args.get("termos") or []) if str(t).strip()]
     excluir = [str(t) for t in (args.get("excluir") or []) if str(t).strip()]
+    qualquer_termo = bool(args.get("qualquer_termo", False))
     escopo = str(args.get("escopo") or "infra").strip().lower()
     if escopo not in {"infra", "clientes", "todos"}:
         escopo = "infra"
     sev_min = max(0, min(int(args.get("severidade_min", 2)), 5))
-    limite = max(1, min(int(args.get("limite", 40)), 100))
+    limite = max(1, min(int(args.get("limite", 60)), 150))
 
     with ZabbixClient() as zbx:
         eventos, avisos = buscar_historico(zbx, inicio_ts, fim_ts, severidade_min=sev_min)
-    selecionados = filtrar(eventos, termos=termos, excluir=excluir, escopo=escopo)
+        grupos_mapa = _mapa_grupos_por_host(zbx) if (termos or excluir) else {}
+    selecionados = _filtrar_eventos_inteligente(
+        eventos,
+        termos=termos,
+        excluir=excluir,
+        escopo=escopo,
+        qualquer_termo=qualquer_termo,
+        grupos_por_host=grupos_mapa,
+    )
     grupos = agrupar(selecionados)
     grupos.sort(key=lambda g: (not g.ativo, -g.severidade, -g.problemas, -g.ultimo.clock))
 
@@ -567,22 +715,23 @@ def _tool_zabbix_historico_eventos(args: dict[str, Any]) -> dict[str, Any]:
         for h, q in sorted(cont_host.items(), key=lambda item: -item[1])[:12]
     ]
 
-    itens = [
-        {
+    itens = []
+    for g in grupos[:limite]:
+        item: dict[str, Any] = {
             "host": g.host,
             "problema": g.problema,
             "severidade": SEVERIDADES.get(g.severidade, str(g.severidade)),
             "status": "ATIVO" if g.ativo else "RESOLVIDO",
-            "ativo": g.ativo,
             "quedas": g.problemas,
             "resolucoes": g.resolucoes,
             "primeiro": g.primeiro.horario.strftime("%d/%m %H:%M:%S"),
             "ultimo": g.ultimo.horario.strftime("%d/%m %H:%M:%S"),
-            "duracao_aprox_s": max(0, g.ultimo.clock - g.primeiro.clock) if not g.ativo else None,
-            "tags": g.ultimo.tags,
         }
-        for g in grupos[:limite]
-    ]
+        if not g.ativo:
+            item["duracao_aprox_s"] = max(0, g.ultimo.clock - g.primeiro.clock)
+        if g.ultimo.tags:
+            item["tags"] = g.ultimo.tags
+        itens.append(item)
     ativos_cnt = sum(1 for g in grupos if g.ativo)
     return {
         "ok": True,
@@ -603,34 +752,45 @@ def _tool_zabbix_historico_eventos(args: dict[str, Any]) -> dict[str, Any]:
 def _tool_zabbix_buscar_hosts(args: dict[str, Any]) -> dict[str, Any]:
     from clients.zabbix import ZabbixClient
 
-    busca = str(args.get("busca") or "").strip()
-    limite = max(1, min(int(args.get("limite", 30)), 100))
+    busca_unica = str(args.get("busca") or "").strip()
+    buscas_lista = [str(b).strip() for b in (args.get("buscas") or []) if str(b).strip()]
+    if busca_unica and busca_unica not in buscas_lista:
+        buscas_lista.insert(0, busca_unica)
+    termos_norm = [normalizar(t) for t in buscas_lista if normalizar(t)]
+    limite = max(1, min(int(args.get("limite", 50)), 200))
+
     with ZabbixClient() as zbx:
-        hosts = zbx.get_hosts(search=busca or None, limit=limite, with_interfaces=True)
+        catalogo = _obter_catalogo_hosts_zabbix(zbx)
+
     lista = []
-    for h in hosts:
-        ips = sorted({
-            str(iface.get("ip", "")).strip()
-            for iface in (h.get("interfaces") or [])
-            if iface.get("ip") and iface.get("ip") != "127.0.0.1"
-        })
+    for h in catalogo:
+        if termos_norm and not any(t in h["_texto_norm"] for t in termos_norm):
+            continue
         lista.append({
-            "hostid": h.get("hostid"),
-            "name": h.get("name"),
-            "host": h.get("host"),
-            "monitorado": str(h.get("status", "0")) == "0",
-            "ips": ips,
+            "hostid": h["hostid"],
+            "name": h["name"],
+            "host": h["host"],
+            "monitorado": h["monitorado"],
+            "ips": h["ips"],
+            "grupos": h["grupos"],
         })
-    return {"ok": True, "busca": busca, "total": len(lista), "hosts": lista}
+    lista.sort(key=lambda x: (x["name"] or "").lower())
+    return {
+        "ok": True,
+        "buscas": buscas_lista or ["*"],
+        "total": len(lista),
+        "exibindo": min(len(lista), limite),
+        "hosts": lista[:limite],
+    }
 
 
 def _tool_zabbix_metricas_host(args: dict[str, Any]) -> dict[str, Any]:
     from clients.zabbix import ZabbixClient
 
     host_alvo = str(args.get("host") or "").strip()
-    filtros = [str(f).strip().lower() for f in (args.get("filtros") or []) if str(f).strip()]
+    filtros = [normalizar(str(f)) for f in (args.get("filtros") or []) if str(f).strip()]
     filtro_chave = str(args.get("filtro_chave") or "").strip() or None
-    limite = max(1, min(int(args.get("limite", 60)), 150))
+    limite = max(1, min(int(args.get("limite", 80)), 180))
 
     with ZabbixClient() as zbx:
         host = zbx.resolve_host(host_alvo)
@@ -641,16 +801,17 @@ def _tool_zabbix_metricas_host(args: dict[str, Any]) -> dict[str, Any]:
     filtrados = []
     for it in sorted(itens, key=lambda x: x.get("name", "")):
         nome = it.get("name", "")
-        if filtros and not any(p in nome.lower() for p in filtros):
+        if filtros and not any(p in normalizar(nome) for p in filtros):
             continue
-        filtrados.append({
-            "itemid": it.get("itemid"),
+        val_fmt = _fmt_valor_metrica(nome, it.get("lastvalue"), it.get("units", ""))
+        item: dict[str, Any] = {
             "nome": nome,
-            "chave": it.get("key_"),
-            "valor_formatado": _fmt_valor_metrica(nome, it.get("lastvalue"), it.get("units", "")),
-            "valor_bruto": it.get("lastvalue"),
+            "valor": val_fmt,
             "atualizado_em": _fmt_clock(it.get("lastclock")),
-        })
+        }
+        if str(it.get("lastvalue", "")).strip() and val_fmt != str(it.get("lastvalue", "")).strip():
+            item["valor_bruto"] = it.get("lastvalue")
+        filtrados.append(item)
     return {
         "ok": True,
         "host": host.get("name") or host.get("host"),
@@ -665,7 +826,7 @@ def _tool_zabbix_historico_metrica(args: dict[str, Any]) -> dict[str, Any]:
     from clients.zabbix import ZabbixClient
 
     host_alvo = str(args.get("host") or "").strip()
-    filtros = [str(f).strip().lower() for f in (args.get("filtros_metrica") or []) if str(f).strip()]
+    filtros = [normalizar(str(f)) for f in (args.get("filtros_metrica") or []) if str(f).strip()]
     if not filtros:
         return {"ok": False, "erro": "Informe ao menos um trecho em 'filtros_metrica'."}
 
@@ -692,7 +853,7 @@ def _tool_zabbix_historico_metrica(args: dict[str, Any]) -> dict[str, Any]:
 
         casados = [
             it for it in sorted(todos_itens, key=lambda x: x.get("name", ""))
-            if any(p in (it.get("name", "") + " " + it.get("key_", "")).lower() for p in filtros)
+            if any(p in normalizar(it.get("name", "") + " " + it.get("key_", "")) for p in filtros)
         ]
         series = []
         for it in casados[:max_itens]:

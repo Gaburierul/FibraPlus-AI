@@ -93,21 +93,25 @@ class ZabbixClient:
         return data.get("result")
 
     def get_hosts(self, search: Optional[str] = None, limit: int = 50,
-                  with_interfaces: bool = False) -> list[dict[str, Any]]:
+                  with_interfaces: bool = False,
+                  with_groups: bool = False) -> list[dict[str, Any]]:
         """
         Obtém uma lista de hosts.
         
         :param search: Filtra os hosts pelo nome (opcional).
         :param limit: Limite máximo de hosts retornados (padrão 50).
         :param with_interfaces: Inclui IPs das interfaces do host quando True.
+        :param with_groups: Inclui grupos de hosts (ex.: nome completo da cidade/POP) quando True.
         :return: Lista de hosts.
         """
         params: dict[str, Any] = {
             "output": ["hostid", "host", "name", "status"],
-            "limit": max(1, min(limit, 500)),
+            "limit": max(1, min(limit, 2000)),
         }
         if with_interfaces:
             params["selectInterfaces"] = ["ip", "dns", "port", "main", "type"]
+        if with_groups:
+            params["selectHostGroups"] = ["name"]
         if search:
             params["search"] = {"name": search}
             

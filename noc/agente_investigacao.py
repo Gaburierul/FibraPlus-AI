@@ -12,6 +12,7 @@ import json
 import os
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -51,10 +52,23 @@ MODELOS_DISPONIVEIS: dict[str, dict[str, str]] = {
     },
 }
 
-MAX_RODADAS = 8
-MAX_CHAMADAS_FERRAMENTA = 14
-MAX_OUTPUT_TOKENS = 4096
-MAX_MENSAGENS_HISTORICO = 14
+def _int_env(nome: str, padrao: int, minimo: int, maximo: int) -> int:
+    bruto = os.getenv(nome, "").strip()
+    if not bruto:
+        return padrao
+    try:
+        val = int(bruto)
+        return max(minimo, min(val, maximo))
+    except ValueError:
+        return padrao
+
+
+# max_output_tokens inclui tokens de raciocínio (thinking) + resposta final.
+# 16.384 evita cortes no meio da frase/tabela no Neon/Hydrogen sem encarecer respostas curtas.
+MAX_RODADAS = _int_env("NOC_CHAT_MAX_ROUNDS", 14, 4, 30)
+MAX_CHAMADAS_FERRAMENTA = _int_env("NOC_CHAT_MAX_TOOLS", 28, 6, 60)
+MAX_OUTPUT_TOKENS = _int_env("NOC_CHAT_MAX_OUTPUT_TOKENS", 16_384, 4096, 65_536)
+MAX_MENSAGENS_HISTORICO = 16
 
 try:
     CHAT_TIMEOUT_MS = int(float(os.getenv("GEMINI_TIMEOUT_S", "90")) * 1000)
@@ -104,8 +118,10 @@ Ravicor usando EXCLUSIVAMENTE as ferramentas somente leitura disponíveis.
      offline) de **bloqueio administrativo/financeiro** (`CA`, `CM`, `FA`, `D`, contrato
      Negativado/Inativo) e sinalize sempre que já existir **Ordem de Serviço aberta**.
 4. **Eficiência e profundidade nas ferramentas:**
+   - **Cidades, POPs e múltiplos alvos:** passe os **nomes completos das cidades** diretamente em `zabbix_buscar_hosts(buscas=["Cidade A", "Cidade B"])` (uma única chamada busca sem acento em nomes, IPs e *hostgroups* de cidades do Zabbix — não desperdice chamadas chutando siglas). Para problemas ou histórico de várias cidades/hosts simultaneamente, use `termos=[...]` com `qualquer_termo=true` em `zabbix_problemas_ativos` e `zabbix_historico_eventos`.
+   - **Chamadas em paralelo:** quando precisar checar métricas/séries/PONs de vários equipamentos independentes, emita múltiplas chamadas de ferramenta na mesma rodada (elas são executadas em paralelo). Evite repetir consultas idênticas que já retornaram vazio.
    - Comece amplo (ex.: `zabbix_problemas_ativos` ou `zabbix_historico_eventos`) e **separe explicitamente o que continua ATIVO agora do que já RESOLVEU na janela** (citando horário de resolução e duração). Nunca apresente eventos já resolvidos (`status="RESOLVIDO"`) como se ainda estivessem ativos.
-   - **Proatividade técnica:** quando o analista pedir verificação ou diagnóstico de incidentes, não pare apenas na listagem de triggers nem recomende que o analista vá consultar níveis de RX/TX, utilização de banda ou descartes que você mesmo pode checar: faça uma 2ª rodada com `zabbix_metricas_host` (ou `zabbix_resumo_olt_pon` / `ixc_diagnosticar_cliente`) nos 2 a 3 equipamentos críticos da janela para já entregar o diagnóstico fechado com os valores atuais reais (tráfego em Mbps/Gbps, % de uso, descartes em eps, status operacional `1=up`/`2=down` e sinal óptico em dBm).
+   - **Proatividade técnica:** quando o analista pedir verificação ou diagnóstico de incidentes, não pare apenas na listagem de triggers nem recomende que o analista vá consultar níveis de RX/TX, utilização de banda ou descartes que você mesmo pode checar: faça uma 2ª rodada com `zabbix_metricas_host` (ou `zabbix_resumo_olt_pon` / `ixc_diagnosticar_cliente`) nos equipamentos críticos da janela para já entregar o diagnóstico fechado com os valores atuais reais (tráfego em Mbps/Gbps, % de uso, descartes em eps, status operacional `1=up`/`2=down` e sinal óptico em dBm).
    - Quando o analista perguntar sobre um cliente, IP ou serial, consulte o IXC diretamente.
 5. **Privacidade / LGPD:** jamais peça ou tente inferir CPF, CNPJ, telefone, endereço
    residencial ou dados de faturas; trabalhe somente com dados técnicos operacionais.
@@ -272,9 +288,10 @@ def investigar_streaming(
 
     yield {"tipo": "status", "texto": f"Analisando solicitação com {nome_amigavel}..."}
 
-    for rodada in range(1, MAX_RODADAS + 1):
+    for rodada in range(1, MAX_RODADAS + 2):
         step_buffers: dict[int, dict[str, Any]] = {}
         assembled_steps: list[dict[str, Any]] | None = None
+        status_interacao = ""
         texto_rodada: list[str] = []
 
         try:
@@ -343,6 +360,7 @@ def investigar_streaming(
                 elif etype == "interaction.completed":
                     inter = getattr(event, "interaction", None)
                     if inter is not None:
+                        status_interacao = str(getattr(inter, "status", "") or "")
                         _acumular_tokens(tokens_totais, getattr(inter, "usage", None))
                         steps_inter = getattr(inter, "steps", None)
                         if steps_inter:
@@ -366,6 +384,13 @@ def investigar_streaming(
                             if isinstance(parte, dict) and parte.get("type") == "text" and parte.get("text"):
                                 texto_final_acumulado.append(parte["text"])
                                 yield {"tipo": "texto", "delta": parte["text"]}
+            if status_interacao == "incomplete":
+                nota_inc = (
+                    "\n\n> Aviso: a resposta atingiu o limite máximo de tokens de saída configurado "
+                    f"({MAX_OUTPUT_TOKENS}). Peça 'continue' se precisar do restante."
+                )
+                texto_final_acumulado.append(nota_inc)
+                yield {"tipo": "texto", "delta": nota_inc}
             yield {
                 "tipo": "concluido",
                 "modelo": model_id,
@@ -377,12 +402,19 @@ def investigar_streaming(
             }
             return
 
+        # Na rodada extra de fechamento (MAX_RODADAS + 1), não executa novas consultas
+        if rodada > MAX_RODADAS:
+            break
+
         # Preserva exatamente os steps do modelo (incluindo thought + signature + function_call)
         history.extend(steps_turno)
 
-        for fc in function_calls:
+        # Prepara lote de ferramentas da rodada (executando em paralelo quando houver >=2)
+        executar_lote: list[tuple[str, str, str, dict[str, Any]]] = []
+        bloqueadas_lote: list[tuple[str, str]] = []
+        for idx_fc, fc in enumerate(function_calls):
             nome_tool = str(fc.get("name") or "")
-            call_id = str(fc.get("id") or f"call_{rodada}_{chamadas_realizadas}")
+            call_id = str(fc.get("id") or f"call_{rodada}_{chamadas_realizadas + idx_fc}")
             raw_args = fc.get("arguments")
             if isinstance(raw_args, str):
                 try:
@@ -395,38 +427,33 @@ def investigar_streaming(
                 args_dict = {}
 
             if chamadas_realizadas >= MAX_CHAMADAS_FERRAMENTA:
-                res_json = json.dumps(
-                    {
-                        "ok": False,
-                        "erro": (
-                            f"Limite de {MAX_CHAMADAS_FERRAMENTA} consultas por turno atingido. "
-                            "Consolide a resposta com as evidências já coletadas."
-                        ),
-                    },
-                    ensure_ascii=False,
-                )
-                history.append({
-                    "type": "function_result",
-                    "name": nome_tool,
-                    "call_id": call_id,
-                    "is_error": True,
-                    "result": [{"type": "text", "text": res_json}],
-                })
+                bloqueadas_lote.append((nome_tool, call_id))
                 continue
 
             chamadas_realizadas += 1
             rotulo = ROTULOS_FERRAMENTAS.get(nome_tool, f"Executando {nome_tool}")
+            executar_lote.append((nome_tool, call_id, rotulo, args_dict))
             yield {
                 "tipo": "ferramenta_inicio",
+                "call_id": call_id,
                 "nome": nome_tool,
                 "rotulo": rotulo,
                 "argumentos": args_dict,
             }
 
+        def _rodar_uma(item: tuple[str, str, str, dict[str, Any]]) -> tuple[str, str, str, dict[str, Any], bool, str, str, int]:
+            n_tool, cid, rot, adict = item
             t0 = time.monotonic()
-            ok, res_json, resumo = executar_ferramenta(nome_tool, args_dict)
-            duracao_ms = round((time.monotonic() - t0) * 1000)
+            ok_r, r_json, res_txt = executar_ferramenta(n_tool, adict)
+            return n_tool, cid, rot, adict, ok_r, r_json, res_txt, round((time.monotonic() - t0) * 1000)
 
+        if len(executar_lote) > 1:
+            with ThreadPoolExecutor(max_workers=min(5, len(executar_lote))) as pool:
+                resultados_lote = list(pool.map(_rodar_uma, executar_lote))
+        else:
+            resultados_lote = [_rodar_uma(it) for it in executar_lote]
+
+        for nome_tool, call_id, rotulo, args_dict, ok, res_json, resumo, duracao_ms in resultados_lote:
             registro_tool = {
                 "nome": nome_tool,
                 "rotulo": rotulo,
@@ -436,7 +463,7 @@ def investigar_streaming(
                 "duracao_ms": duracao_ms,
             }
             ferramentas_log.append(registro_tool)
-            yield {"tipo": "ferramenta_fim", **registro_tool}
+            yield {"tipo": "ferramenta_fim", "call_id": call_id, **registro_tool}
 
             history.append({
                 "type": "function_result",
@@ -444,6 +471,36 @@ def investigar_streaming(
                 "call_id": call_id,
                 "is_error": not ok,
                 "result": [{"type": "text", "text": res_json}],
+            })
+
+        for nome_tool, call_id in bloqueadas_lote:
+            res_json = json.dumps(
+                {
+                    "ok": False,
+                    "erro": (
+                        f"Limite de {MAX_CHAMADAS_FERRAMENTA} consultas por turno atingido. "
+                        "Consolide a resposta com as evidências já coletadas."
+                    ),
+                },
+                ensure_ascii=False,
+            )
+            history.append({
+                "type": "function_result",
+                "name": nome_tool,
+                "call_id": call_id,
+                "is_error": True,
+                "result": [{"type": "text", "text": res_json}],
+            })
+
+        # Se acabamos de concluir a última rodada de consultas, orienta o modelo a fechar na próxima
+        if rodada == MAX_RODADAS and history and history[-1].get("type") == "function_result":
+            history[-1]["result"].append({
+                "type": "text",
+                "text": (
+                    "[SISTEMA: limite de rodadas de consulta atingido neste turno. "
+                    "Responda agora ao analista consolidando todas as evidências já coletadas, "
+                    "sem chamar novas ferramentas.]"
+                ),
             })
 
         yield {"tipo": "status", "texto": f"Correlacionando evidências com {nome_amigavel}..."}

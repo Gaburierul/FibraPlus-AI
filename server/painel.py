@@ -69,7 +69,7 @@ class AtualizarConversaReq(BaseModel):
 
 
 class NovaMensagemReq(BaseModel):
-    conteudo: str = Field(..., min_length=1, max_length=8000)
+    conteudo: str = Field(..., min_length=1, max_length=32000)
     modelo: str | None = Field(default=None, max_length=60)
 
 
@@ -257,7 +257,12 @@ async def rapido_infra_ativa(
 ) -> JSONResponse:
     args: dict[str, Any] = {"escopo": escopo, "severidade_min": severidade_min, "limite": 60}
     if termo.strip():
-        args["termos"] = termo.strip().split()
+        if "," in termo or ";" in termo:
+            partes = [p.strip() for p in termo.replace(";", ",").split(",") if p.strip()]
+            args["termos"] = partes
+            args["qualquer_termo"] = True
+        else:
+            args["termos"] = termo.strip().split()
     return await asyncio.to_thread(_executar_rapido_json, "zabbix_problemas_ativos", args)
 
 
