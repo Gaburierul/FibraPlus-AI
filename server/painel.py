@@ -85,6 +85,14 @@ async def pagina_inicial():
     return FileResponse(index_path)
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    icon_path = PASTA_ESTATICOS / "favicon.svg"
+    if not icon_path.exists():
+        raise HTTPException(status_code=404, detail="Favicon não encontrado.")
+    return FileResponse(icon_path, media_type="image/svg+xml")
+
+
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     return {"status": "ok", "servico": "painel_noc_local"}

@@ -124,6 +124,28 @@ def test_zabbix_pon_summary_classifica_loss_e_dyinggasp():
     assert res["clientes_ativos_por_motivo"]["DyingGasp / Energia (-90)"] == 1
 
 
+def test_zabbix_pon_summary_infere_total_sem_item_provisionadas():
+    zbx = ZabbixClient.__new__(ZabbixClient)
+
+    def falso_call(method, params):
+        if method == "host.get":
+            return [{"hostid": "102", "host": "LAB-ZTE-OLT02", "name": "LAB-ZTE-OLT02", "status": "0"}]
+        if method == "item.get":
+            return [
+                {"itemid": "1", "name": "PON gpon_olt-1/1/9: ONUs ONLINE", "lastvalue": "0", "lastclock": "1700000000"},
+                {"itemid": "2", "name": "PON gpon_olt-1/1/9: ONUs LOSS", "lastvalue": "2", "lastclock": "1700000000"},
+                {"itemid": "3", "name": "PON gpon_olt-1/1/9: ONUs DYINGGASP", "lastvalue": "1", "lastclock": "1700000000"},
+                {"itemid": "4", "name": "PON gpon_olt-1/1/9: ONUs OFFLINE", "lastvalue": "1", "lastclock": "1700000000"},
+            ]
+        return []
+
+    zbx._call = falso_call
+    res = zbx.get_pon_summary("LAB-ZTE-OLT02")
+    assert res["totais"]["provisionadas"] == 4
+    assert res["pons_afetadas"][0]["provisionadas"] == 4
+    assert res["pons_afetadas"][0]["percentual_queda"] == 100.0
+
+
 def test_agente_streaming_function_calling_stateless_preserva_steps():
     assert resolver_modelo("hydrogen")[0] == "gemini-4-hydrogen"
     assert resolver_modelo("neon")[0] == "gemini-4-neon"
@@ -245,6 +267,9 @@ def test_painel_fastapi_rotas_e_sse(tmp_path, monkeypatch):
 
     client = TestClient(painel.app)
     assert client.get("/").status_code == 200
+    fav = client.get("/favicon.ico")
+    assert fav.status_code == 200
+    assert "svg" in fav.headers.get("content-type", "")
     assert client.get("/api/health").json()["status"] == "ok"
 
     cfg = client.get("/api/config").json()

@@ -393,13 +393,20 @@ class ZabbixClient:
                 except (TypeError, ValueError):
                     pass
 
+        prov_explicito = sum(d.get("PROVISIONADAS", 0) for d in pons.values())
+        total_on = sum(d.get("ONLINE", 0) for d in pons.values())
+        total_loss = sum(d.get("LOSS", 0) for d in pons.values())
+        total_dg = sum(d.get("DYINGGASP", 0) for d in pons.values())
+        total_off = sum(d.get("OFFLINE", 0) for d in pons.values())
+        prov_inferido = prov_explicito == 0 and (total_on + total_loss + total_dg + total_off) > 0
+
         totais = {
             "pons_monitoradas": len(pons),
-            "provisionadas": sum(d.get("PROVISIONADAS", 0) for d in pons.values()),
-            "online": sum(d.get("ONLINE", 0) for d in pons.values()),
-            "loss": sum(d.get("LOSS", 0) for d in pons.values()),
-            "dyinggasp": sum(d.get("DYINGGASP", 0) for d in pons.values()),
-            "offline": sum(d.get("OFFLINE", 0) for d in pons.values()),
+            "provisionadas": (total_on + total_loss + total_dg + total_off) if prov_inferido else prov_explicito,
+            "online": total_on,
+            "loss": total_loss,
+            "dyinggasp": total_dg,
+            "offline": total_off,
         }
 
         pons_afetadas = []
@@ -409,11 +416,13 @@ class ZabbixClient:
             off = d.get("OFFLINE", 0)
             on = d.get("ONLINE", 0)
             prov = d.get("PROVISIONADAS", 0)
-            if loss > 0 or dg > 0 or off > 0 or (prov > 0 and on < prov):
-                pct = round(100.0 * max(0, prov - on) / prov, 1) if prov else 0.0
+            base_total = prov if prov > 0 else (on + loss + dg + off)
+            if loss > 0 or dg > 0 or off > 0 or (base_total > 0 and on < base_total):
+                caidas = max(0, base_total - on) if prov > 0 else (loss + dg + off)
+                pct = round(100.0 * caidas / base_total, 1) if base_total else 0.0
                 pons_afetadas.append({
                     "pon": pon_id,
-                    "provisionadas": prov,
+                    "provisionadas": base_total,
                     "online": on,
                     "loss": loss,
                     "dyinggasp": dg,

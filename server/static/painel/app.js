@@ -117,6 +117,13 @@
         continue;
       }
 
+      // Separador horizontal (---, ***, ___)
+      if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trim)) {
+        html.push("<hr />");
+        i++;
+        continue;
+      }
+
       // Cabeçalhos
       const hm = trim.match(/^(#{1,4})\s+(.+)$/);
       if (hm) {
@@ -183,6 +190,7 @@
       while (
         i < lines.length &&
         lines[i].trim() &&
+        !/^(?:-{3,}|\*{3,}|_{3,})$/.test(lines[i].trim()) &&
         !/^(#{1,4})\s+/.test(lines[i].trim()) &&
         !/^[-*•]\s+/.test(lines[i].trim()) &&
         !/^\d+\.\s+/.test(lines[i].trim()) &&
@@ -941,7 +949,7 @@
             .map(
               (m) => `<tr>
                 <td class="mono">${esc(m.modelo)}</td>
-                <td>${m.brl_economia_30d > 0 ? `<span class="badge badge-ok">Free Tier (Economia ${esc(fmtBrl(m.brl_economia_30d))})</span>` : `<span class="badge badge-neutral">Paid Tier</span>`}</td>
+                <td>${String(m.regime || "").startsWith("Free Tier") || m.brl_economia_30d > 0 ? `<span class="badge badge-ok">Free Tier</span>` : `<span class="badge badge-neutral">Paid Tier</span>`}</td>
                 <td class="mono">${esc(m.chamadas_30d)}</td>
                 <td class="mono">${Number(m.tokens_30d || 0).toLocaleString("pt-BR")}</td>
                 <td class="mono"><strong>${esc(fmtBrl(m.brl_30d))}</strong></td>
@@ -965,7 +973,7 @@
         : `<tr><td colspan="5">Sem dados nos últimos 14 dias.</td></tr>`;
 
       const sub30d = c.webhook_free_tier
-        ? `Painel ${fmtBrl(c.ultimos_30d?.brl_painel)} · Webhook Free Tier (economia ${fmtBrl(c.ultimos_30d?.brl_webhook_economia)})`
+        ? `Painel ${fmtBrl(c.ultimos_30d?.brl_painel)} · Webhook Free Tier`
         : `Webhook ${fmtBrl(c.ultimos_30d?.brl_webhook)} · Painel ${fmtBrl(c.ultimos_30d?.brl_painel)}`;
 
       el.quickPanelBody.innerHTML = `
